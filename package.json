@@ -1,0 +1,43 @@
+{
+  "name": "video-research-platform",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck",
+    "cf:build": "opennextjs-cloudflare build",
+    "cf:preview": "opennextjs-cloudflare preview",
+    "cf:deploy": "opennextjs-cloudflare deploy"
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "5.3.0",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.119.0",
+    "lucide-react": "0.577.0",
+    "next": "15.5.29",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.0",
+    "@opennextjs/cloudflare": "1.20.17",
+    "@tailwindcss/postcss": "4.3.5",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "15.5.29",
+    "postcss": "^8.5.0",
+    "tailwindcss": "4.3.5",
+    "typescript": "^5.9.0",
+    "wrangler": "4.164.0"
+  }
+}
