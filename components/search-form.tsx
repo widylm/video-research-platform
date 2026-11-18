@@ -36,7 +36,7 @@ export function SearchForm({ query, busy, onChange, onSearch }: SearchFormProps)
             key={key} type="button" aria-pressed={query.platform === platform}
             className="source-button" onClick={() => field("platform", platform)}
           >
-            {platform !== "all" && <span className={`source-dot ${platform}`} aria-hidden="true" />}
+            {platform !== "all" && <span className="source-dot" aria-hidden="true" />}
             {label}
           </button>;
         })}
