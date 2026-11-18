@@ -11,7 +11,11 @@ const compact = new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFra
 const dateFormat = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeZone: "UTC" });
 
 export function PlatformBadge({ platform }: { platform: Video["platform"] }) {
-  return <span className={`platform-badge ${platform}`}><span aria-hidden="true" />{platformNames[platform]}</span>;
+  return <span className="platform-badge"><span aria-hidden="true" />{platformNames[platform]}</span>;
+}
+
+function PublicationDate({ value }: { value: string }) {
+  return <time dateTime={value}>{dateFormat.format(new Date(value))}</time>;
 }
 
 export function VideoMetrics({ video, full = false }: { video: Video; full?: boolean }) {
@@ -23,7 +27,7 @@ export function VideoMetrics({ video, full = false }: { video: Video; full?: boo
     <span title="Лайки" aria-label={`Лайки: ${formatNumber.format(video.likes)}`}>
       <Heart size={15} aria-hidden="true" /> {number.format(video.likes)}
     </span>
-    {full && <span><CalendarDays size={16} />{dateFormat.format(new Date(video.publishedAt))}</span>}
+    {full && <span><CalendarDays size={16} aria-hidden="true" /><PublicationDate value={video.publishedAt} /></span>}
   </div>;
 }
 
@@ -87,7 +91,10 @@ export function VideoResults(props: Props) {
         </div>
         <div className="video-body">
           <h3><button onClick={() => onOpen(video)}>{video.title}</button></h3>
-          <p className="video-author">@{video.author}</p>
+          <p className="video-byline">
+            <span className="video-author">@{video.author}</span>
+            <PublicationDate value={video.publishedAt} />
+          </p>
           <VideoMetrics video={video} />
         </div>
       </article>)}
@@ -100,7 +107,7 @@ export function VideoResults(props: Props) {
           <td><button className="table-video" onClick={() => onOpen(video)}>{video.title}</button>
             <small>@{video.author}</small></td>
           <td><PlatformBadge platform={video.platform} /></td>
-          <td>{dateFormat.format(new Date(video.publishedAt))}</td>
+          <td><PublicationDate value={video.publishedAt} /></td>
           <td>{formatNumber.format(video.views)}</td><td>{formatNumber.format(video.likes)}</td>
           <td><FavoriteButton video={video} saved={favorites.includes(video.id)} busy={busy} onFavorite={onFavorite} /></td>
         </tr>)}</tbody>
