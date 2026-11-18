@@ -1,0 +1,3 @@
+# Leave both empty for the standalone demo.
+SUPABASE_URL=
+SUPABASE_PUBLISHABLE_KEY=
