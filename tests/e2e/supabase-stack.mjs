@@ -140,6 +140,7 @@ export async function startSupabaseStack() {
     ]);
     sql(["begin;", ...migrations, "commit;"].join("\n"));
     sql(await readFile(join(repo, "supabase/migrations/20261119000100_saved_public_videos.sql"), "utf8"));
+    sql(await readFile(join(repo, "supabase/migrations/20261119000200_edit_video_metadata.sql"), "utf8"));
 
     const profiles = {
       admin: "Администратор тестовой команды",

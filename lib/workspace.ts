@@ -13,8 +13,8 @@ export async function workspace() {
   return { mode: "team", supabase, profile } as const;
 }
 
-const videoColumns = "id, platform, external_id, url, author, title, description, hashtags, published_at, views, likes, cover, is_mock";
-type VideoRow = Omit<Video, "externalId" | "publishedAt" | "isMock"> & {
+export const videoColumns = "id, platform, external_id, url, author, title, description, hashtags, published_at, views, likes, cover, is_mock";
+export type VideoRow = Omit<Video, "externalId" | "publishedAt" | "isMock"> & {
   external_id: string;
   published_at: string | null;
   is_mock: boolean;

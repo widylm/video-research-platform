@@ -51,6 +51,9 @@ export function AddVideoDialog({ collections, collectionId, onClose, onSaved }: 
             aria-describedby="add-video-link-hint" autoFocus />
         </label>
         <p className="field-hint" id="add-video-link-hint">Видео TikTok, Reels и публикации Instagram. Поддерживаются короткие ссылки.</p>
+        <label>Название
+          <input name="title" maxLength={120} placeholder="Как назвать это видео в каталоге" />
+        </label>
         <label>Описание
           <textarea name="description" rows={3} maxLength={2200} placeholder="О чём это видео" />
         </label>

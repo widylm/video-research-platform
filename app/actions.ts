@@ -5,9 +5,9 @@ import { libraryCommand, type Library } from "@/lib/library";
 import { checkVideoEmbed, resolveVideoLink } from "@/lib/public-video-url";
 import { searchVideos } from "@/lib/providers";
 import { currentProfile, serverSupabase } from "@/lib/supabase";
-import { videoEntrySchema } from "@/lib/video-entry";
-import { platformNames, searchSchema, type Video } from "@/lib/videos";
-import { changeLibrary, readLibrary, searchCatalog, toVideo, workspace, type SavedVideoRow } from "@/lib/workspace";
+import { videoDetailsSchema, videoEntrySchema } from "@/lib/video-entry";
+import { platformVideoTitle, searchSchema, type Video } from "@/lib/videos";
+import { changeLibrary, readLibrary, searchCatalog, toVideo, videoColumns, workspace, type SavedVideoRow, type VideoRow } from "@/lib/workspace";
 
 type ActionResult<T> = { data: T } | { error: string };
 const authError = { error: "Войдите в аккаунт команды, чтобы продолжить." };
@@ -42,6 +42,7 @@ export async function savePublicVideo(input: unknown): Promise<ActionResult<{ vi
   if (!parsed.success) {
     const field = parsed.error.issues[0]?.path[0];
     if (field === "url") return { error: "Вставьте полную или короткую ссылку на видео." };
+    if (field === "title") return { error: "Название должно быть не длиннее 120 символов." };
     if (field === "hashtags") return { error: "Введите до 30 хэштегов через пробел или запятую. Используйте буквы, цифры и подчёркивания." };
     if (field === "views" || field === "likes") return { error: "Введите целое неотрицательное число или оставьте поле пустым." };
     return { error: "Проверьте дату, длину описания и выбранную коллекцию." };
@@ -57,7 +58,7 @@ export async function savePublicVideo(input: unknown): Promise<ActionResult<{ vi
     const { platform, externalId, url, author } = result.video;
     const { description, publishedAt, hashtags, views, likes, collectionId } = parsed.data;
     const firstLine = description.split(/\r?\n/, 1)[0]?.trim();
-    const title = firstLine ? Array.from(firstLine).slice(0, 100).join("") : `Видео ${platformNames[platform]} · ${externalId}`;
+    const title = parsed.data.title || (firstLine ? Array.from(firstLine).slice(0, 100).join("") : platformVideoTitle(platform));
 
     const { data, error } = await session.supabase.rpc("save_public_video", {
       p_platform: platform, p_external_id: externalId, p_url: url, p_author: author,
@@ -72,6 +73,32 @@ export async function savePublicVideo(input: unknown): Promise<ActionResult<{ vi
     return { data: { video: toVideo(data.video), created: data.created } };
   } catch {
     return { error: "Не удалось сохранить видео. Попробуйте ещё раз." };
+  }
+}
+
+export async function updateVideoDetails(input: unknown): Promise<ActionResult<Video>> {
+  const parsed = videoDetailsSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.path[0] === "author"
+      ? "Укажите имя пользователя Instagram до 30 символов, без пробелов."
+      : "Введите название и проверьте длину описания." };
+  }
+
+  try {
+    const session = await workspace();
+    if (session.mode !== "team") return authError;
+    if (session.profile.role === "viewer") return { error: "Редактировать видео могут администраторы и участники." };
+
+    const { id, author, title, description } = parsed.data;
+    const update = session.supabase.from("videos")
+      .update(author === undefined ? { title, description } : { title, description, author })
+      .eq("id", id).eq("is_mock", false);
+    if (author !== undefined) update.eq("platform", "instagram");
+    const { data, error } = await update.select(videoColumns).maybeSingle<VideoRow>();
+    if (error) throw error;
+    return data ? { data: toVideo(data) } : { error: "Карточка недоступна для редактирования." };
+  } catch {
+    return { error: "Не удалось обновить карточку. Попробуйте ещё раз." };
   }
 }
 

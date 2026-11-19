@@ -1,10 +1,12 @@
 "use client";
 
 import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import {
   CalendarDays, Eye, Film, Heart, LayoutGrid, List, Play, SearchX,
 } from "lucide-react";
-import { platformNames, sortOptions, type Sort, type Video } from "@/lib/videos";
+import { officialEmbed, platformNames, sortOptions, videoLabel, type Sort, type Video, type VideoPreview } from "@/lib/videos";
+import { EmbeddedVideo } from "./embedded-video";
 
 export const formatNumber = new Intl.NumberFormat("ru-RU");
 const compact = new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFractionDigits: 1 });
@@ -25,13 +27,14 @@ function count(value: number | null, formatter = formatNumber) {
 
 export function VideoMetrics({ video, full = false }: { video: Video; full?: boolean }) {
   const number = full ? formatNumber : compact;
+  if (!full && video.views === null && video.likes === null) return null;
   return <div className="video-metrics">
-    <span title="Просмотры" aria-label={`Просмотры: ${count(video.views)}`}>
+    {(full || video.views !== null) && <span title="Просмотры" aria-label={`Просмотры: ${count(video.views)}`}>
       <Eye size={16} aria-hidden="true" /> {count(video.views, number)}
-    </span>
-    <span title="Лайки" aria-label={`Лайки: ${count(video.likes)}`}>
+    </span>}
+    {(full || video.likes !== null) && <span title="Лайки" aria-label={`Лайки: ${count(video.likes)}`}>
       <Heart size={15} aria-hidden="true" /> {count(video.likes, number)}
-    </span>
+    </span>}
     {full && <span><CalendarDays size={16} aria-hidden="true" /><PublicationDate value={video.publishedAt} /></span>}
   </div>;
 }
@@ -45,25 +48,113 @@ interface Props {
   emptyHint: string;
   onView: (view: Props["view"]) => void;
   onSort: (sort: Sort) => void;
-  onOpen: (video: Video) => void;
+  onOpen: (video: Video, preview?: VideoPreview) => void;
   onFavorite: (video: Video) => void;
 }
 
-function FavoriteButton({ video, saved, busy, onFavorite }: {
+function FavoriteButton({ video, title, saved, busy, onFavorite }: {
   video: Video;
+  title: string;
   saved: boolean;
   busy: boolean;
   onFavorite: Props["onFavorite"];
 }) {
   return <button className={`icon-button favorite-button${saved ? " saved" : ""}`}
-    aria-label={saved ? `Убрать из избранного: ${video.title}` : `В избранное: ${video.title}`}
+    aria-label={saved ? `Убрать из избранного: ${title}` : `В избранное: ${title}`}
     aria-pressed={saved} disabled={busy} onClick={() => onFavorite(video)}>
     <Heart size={17} fill={saved ? "currentColor" : "none"} />
   </button>;
 }
 
+function useVideoPreview<T extends HTMLElement>(video: Video) {
+  const { id, isMock, platform } = video;
+  const ref = useRef<T>(null);
+  const [preview, setPreview] = useState<VideoPreview>();
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || isMock || platform !== "tiktok") return;
+    const controller = new AbortController();
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      observer.disconnect();
+      void fetch(`/api/videos/${id}/preview`, { signal: controller.signal }).then(async (response) => {
+        if (response.ok) setPreview((await response.json()) ?? undefined);
+      }).catch(() => {
+        // The card can still show its saved details when enrichment is unavailable.
+      });
+    }, { rootMargin: "160px" });
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+      controller.abort();
+    };
+  }, [id, isMock, platform]);
+
+  return { ref, preview };
+}
+
+type EntryProps = Pick<Props, "busy" | "onOpen" | "onFavorite"> & { video: Video; saved: boolean };
+
+function VideoCard({ video, saved, busy, inline, onTogglePreview, onOpen, onFavorite }: EntryProps & {
+  inline: boolean;
+  onTogglePreview: () => void;
+}) {
+  const { ref, preview } = useVideoPreview<HTMLElement>(video);
+  const [failedCover, setFailedCover] = useState("");
+  const { title, author } = videoLabel(video, preview);
+  const cover = video.isMock ? video.cover : preview?.thumbnailUrl;
+  const showCover = cover && cover !== failedCover && !inline;
+  const embed = officialEmbed(video);
+  const open = () => onOpen(video, preview);
+  const badge = <PlatformBadge platform={video.platform} />;
+  const favorite = <FavoriteButton video={video} title={title} saved={saved} busy={busy} onFavorite={onFavorite} />;
+
+  return <article className="panel video-card" ref={ref}>
+    {showCover ? <div className="video-cover">
+      <button className="cover-trigger" onClick={open} aria-label={`Подробнее: ${title}`}>
+        <Image src={cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw"
+          unoptimized referrerPolicy="no-referrer" onError={() => setFailedCover(cover)} />
+        <span className="play-mark" aria-hidden="true"><Play size={19} fill="currentColor" /></span>
+      </button>
+      {badge}{favorite}
+    </div> : <div className="video-card-header">{badge}{favorite}</div>}
+
+    <div className="video-body">
+      <h3><button onClick={open}>{title}</button></h3>
+      <p className="video-byline">
+        <span className="video-author">{author || "Автор не указан"}</span>
+        {video.publishedAt && <PublicationDate value={video.publishedAt} />}
+      </p>
+      {!video.isMock && <p className="video-card-description">{video.description || "Описание не добавлено"}</p>}
+      <VideoMetrics video={video} />
+      {embed && <button className="button secondary catalog-preview-button" type="button"
+        onClick={onTogglePreview} aria-expanded={inline} aria-controls={`preview-${video.id}`}>
+        <Play size={16} aria-hidden="true" /> {inline ? "Скрыть предпросмотр" : "Предпросмотр"}
+      </button>}
+    </div>
+    {embed && <div id={`preview-${video.id}`} className={inline ? "catalog-player" : undefined} hidden={!inline}>
+      {inline && <EmbeddedVideo video={video} src={embed} />}
+    </div>}
+  </article>;
+}
+
+function VideoTableRow({ video, saved, busy, onOpen, onFavorite }: EntryProps) {
+  const { ref, preview } = useVideoPreview<HTMLTableRowElement>(video);
+  const { title, author } = videoLabel(video, preview);
+  return <tr ref={ref}>
+    <td><button className="table-video" onClick={() => onOpen(video, preview)}>{title}</button>
+      {author && <small>{author}</small>}</td>
+    <td><PlatformBadge platform={video.platform} /></td>
+    <td><PublicationDate value={video.publishedAt} /></td>
+    <td>{count(video.views)}</td><td>{count(video.likes)}</td>
+    <td><FavoriteButton video={video} title={title} saved={saved} busy={busy} onFavorite={onFavorite} /></td>
+  </tr>;
+}
+
 export function VideoResults(props: Props) {
   const { videos, favorites, view, sort, busy, emptyHint, onView, onSort, onOpen, onFavorite } = props;
+  const [inlineId, setInlineId] = useState<string>();
 
   return <>
     <div className="results-toolbar">
@@ -78,45 +169,25 @@ export function VideoResults(props: Props) {
           <button className="icon-button" type="button" title="Плитка" aria-label="Плитка"
             aria-pressed={view === "grid"} onClick={() => onView("grid")}><LayoutGrid size={17} /></button>
           <button className="icon-button" type="button" title="Таблица" aria-label="Таблица"
-            aria-pressed={view === "table"} onClick={() => onView("table")}><List size={17} /></button>
+            aria-pressed={view === "table"} onClick={() => { setInlineId(undefined); onView("table"); }}><List size={17} /></button>
         </div>
       </div>
     </div>
     {videos.length === 0 ? <div className="panel empty-state">
       <SearchX size={25} /><strong>Здесь пока нет видео</strong><p>{emptyHint}</p>
     </div> : view === "grid" ? <div className="video-grid">
-      {videos.map((video) => <article className="panel video-card" key={video.id}>
-        <div className="video-cover">
-          <button className="cover-trigger" onClick={() => onOpen(video)} aria-label={`Подробнее: ${video.title}`}>
-            {video.cover ? <Image src={video.cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw" />
-              : <span className="saved-cover" aria-hidden="true"><Film size={68} strokeWidth={1} /></span>}
-            <span className="play-mark" aria-hidden="true"><Play size={19} fill="currentColor" /></span>
-          </button>
-          <PlatformBadge platform={video.platform} />
-          <FavoriteButton video={video} saved={favorites.includes(video.id)} busy={busy} onFavorite={onFavorite} />
-        </div>
-        <div className="video-body">
-          <h3><button onClick={() => onOpen(video)}>{video.title}</button></h3>
-          <p className="video-byline">
-            {video.author && <span className="video-author">@{video.author}</span>}
-            <PublicationDate value={video.publishedAt} />
-          </p>
-          <VideoMetrics video={video} />
-        </div>
-      </article>)}
+      {videos.map((video) => <VideoCard key={video.id}
+        video={video} saved={favorites.includes(video.id)} busy={busy} inline={inlineId === video.id}
+        onTogglePreview={() => setInlineId((id) => id === video.id ? undefined : video.id)}
+        onOpen={(entry, preview) => { setInlineId(undefined); onOpen(entry, preview); }} onFavorite={onFavorite}
+      />)}
     </div> : <div className="panel table-scroll" tabIndex={0} role="region" aria-label="Таблица видео">
       <table>
         <thead><tr><th scope="col">Видео</th><th scope="col">Платформа</th><th scope="col">Дата</th>
           <th scope="col">Просмотры</th><th scope="col">Лайки</th><th scope="col"><span className="sr-only">Избранное</span></th>
         </tr></thead>
-        <tbody>{videos.map((video) => <tr key={video.id}>
-          <td><button className="table-video" onClick={() => onOpen(video)}>{video.title}</button>
-            {video.author && <small>@{video.author}</small>}</td>
-          <td><PlatformBadge platform={video.platform} /></td>
-          <td><PublicationDate value={video.publishedAt} /></td>
-          <td>{count(video.views)}</td><td>{count(video.likes)}</td>
-          <td><FavoriteButton video={video} saved={favorites.includes(video.id)} busy={busy} onFavorite={onFavorite} /></td>
-        </tr>)}</tbody>
+        <tbody>{videos.map((video) => <VideoTableRow key={video.id} video={video}
+          saved={favorites.includes(video.id)} busy={busy} onOpen={onOpen} onFavorite={onFavorite} />)}</tbody>
       </table>
     </div>}
   </>;

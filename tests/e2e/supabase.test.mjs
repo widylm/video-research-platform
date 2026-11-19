@@ -31,6 +31,7 @@ function button(page, name) {
 async function loginPage(t) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   t.after(() => page.close());
+  await page.route("**/api/videos/*/preview", (route) => route.fulfill({ json: null }));
   await page.goto(stack.appUrl);
   await page.waitForURL("**/login");
   await page.getByRole("heading", { name: loginTitle }).waitFor();
@@ -176,7 +177,8 @@ test("saved public videos appear in the team catalog and can join personal and s
   const videoName = "Свежий ролик про кофе";
   const canonical = "https://www.tiktok.com/@scout2015/video/6718335390845095173";
   await entry.getByLabel("Ссылка на видео").fill(canonical + "?tracking=1");
-  await entry.getByLabel("Описание").fill(videoName);
+  await entry.getByLabel("Название").fill(videoName);
+  await entry.getByLabel("Описание").fill("Ручное описание ролика.");
   await entry.getByLabel("Хэштеги").fill("#КОФЕ, #утро");
   await entry.getByLabel("Дата публикации").fill("2026-11-18");
   await entry.getByLabel("Лайки").fill("0");
@@ -282,4 +284,145 @@ async function testPublicVideoAccess() {
 
   const outsider = await stack.restAs("outsider", "videos?select=id");
   assert.deepEqual(await outsider.json(), []);
+}
+
+test("catalog cards show trusted covers, fallback text and one on-demand player", { timeout: 55_000 }, async (t) => {
+  const video = await addCatalogFixture("tiktok", "1234567890123456789");
+  const broken = await addCatalogFixture("tiktok", "1234567890123456788");
+  const instagram = await addCatalogFixture("instagram", "KadrPreview01");
+  const denied = await fetch(`${stack.appUrl}/api/videos/${video.id}/preview`);
+  assert.equal(denied.status, 401);
+  assert.match(denied.headers.get("cache-control"), /private, no-store/);
+
+  const page = await loginPage(t);
+  const cover = "https://p16-sign-sg.tiktokcdn.com/cover.webp?x-signature=signed";
+  const missingCover = "https://p16-sign-sg.tiktokcdn.com/missing.webp";
+  await page.route(`**/api/videos/${video.id}/preview`, (route) => route.fulfill({
+    json: { title: "Название из TikTok", authorName: "Имя автора", thumbnailUrl: cover },
+  }));
+  await page.route(`**/api/videos/${broken.id}/preview`, (route) => route.fulfill({
+    json: { thumbnailUrl: missingCover },
+  }));
+  await page.route(cover, (route) => route.fulfill({
+    contentType: "image/svg+xml",
+    body: '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="orange"/></svg>',
+  }));
+  const brokenRequest = page.waitForRequest((request) => request.url() === missingCover);
+  await page.route(missingCover, (route) => route.abort());
+  await page.route("https://www.tiktok.com/player/v1/*", (route) => route.fulfill({ body: "TikTok iframe" }));
+  await page.route("https://www.instagram.com/p/KadrPreview01/embed/", (route) => route.fulfill({ body: "Instagram iframe" }));
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await submitLogin(page, "viewer");
+  await page.waitForURL(stack.appUrl + "/");
+  await page.getByLabel("Дата публикации с").fill("2026-11-19");
+  await button(page, "Найти видео").click();
+  await page.getByText("Найдено: 3", { exact: true }).waitFor();
+  const cards = page.locator("article");
+  const tik = cards.filter({ has: button(page, "Название из TikTok") });
+  await tik.getByText("Имя автора").waitFor();
+  await tik.locator("img").evaluate((img) => img.decode());
+  assert.equal(await tik.locator("img").getAttribute("src"), cover);
+  assert.equal(await tik.getByText("Нет данных", { exact: true }).count(), 0);
+
+  const fallback = cards.filter({ hasText: "Заметки о съёмке" });
+  await fallback.scrollIntoViewIfNeeded();
+  await fallback.getByText("@studio.notes").waitFor();
+  await brokenRequest;
+  await fallback.locator("img").waitFor({ state: "hidden" });
+  assert.equal(await fallback.getByRole("heading").textContent(), "Заметки о съёмке");
+
+  assert.equal(await page.locator("iframe").count(), 0);
+  await button(tik, "Предпросмотр").click();
+  assert.match(await tik.locator("iframe").getAttribute("src"), /tiktok\.com\/player\/v1\//);
+  const ig = cards.filter({ has: button(page, "Публикация Instagram") });
+  await ig.getByText("Автор не указан").waitFor();
+  await ig.getByText("Описание не добавлено").waitFor();
+  assert.equal(await ig.getByText(instagram.external_id).count(), 0);
+  await button(ig, "Предпросмотр").click();
+  await tik.locator("iframe").waitFor({ state: "detached" });
+  assert.equal(await ig.locator("iframe").getAttribute("src"), "https://www.instagram.com/p/KadrPreview01/embed/");
+  await button(ig, "Публикация Instagram").click();
+  const dialog = page.getByRole("dialog", { name: "Публикация Instagram" });
+  await dialog.locator("iframe").waitFor();
+  await button(dialog, "Редактировать карточку").waitFor({ state: "hidden" });
+  await button(dialog, "Закрыть").click();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+});
+
+test("authorized editors can rename a saved video without changing its identity or collections", { timeout: 45_000 }, async (t) => {
+  const video = await addCatalogFixture("instagram", "KadrEdit002");
+  const change = (role, updates, id = video.id) => stack.restAs(role, `videos?id=eq.${id}`, {
+    method: "PATCH", headers: { Prefer: "return=representation" }, body: JSON.stringify(updates),
+  });
+  for (const role of ["viewer", "outsider"]) {
+    const denied = await change(role, { title: "Недопустимое изменение" });
+    assert.deepEqual(await denied.json(), []);
+  }
+  const anon = await change("anon", { title: "Недопустимое изменение" });
+  assert.equal((await anon.json()).code, "42501");
+  for (const updates of [{ views: 10 }, { url: "https://example.org/" }, { cover: "https://example.org/" }]) {
+    const denied = await change("member", updates);
+    assert.equal((await denied.json()).code, "42501");
+  }
+  const demoEdit = await change("admin", { title: "Чужая демозапись" }, "69000000-0000-4000-8000-000000000001");
+  assert.deepEqual(await demoEdit.json(), []);
+
+  const editor = await signedInAs(t, "member");
+  await editor.route("https://www.instagram.com/p/KadrEdit002/embed/", (route) => route.fulfill({ body: "Instagram iframe" }));
+  await button(editor, "Коллекции").click();
+  await editor.getByLabel("Название").fill("Общие идеи для съёмки");
+  await button(editor, "Создать").click();
+  await button(editor, /Общие идеи для съёмки/).waitFor();
+  await button(editor, "Поиск видео").click();
+  await editor.getByLabel("Ключевые слова").fill("KadrEdit002");
+  await button(editor, "Найти видео").click();
+  await editor.getByText("Найдено: 1", { exact: true }).waitFor();
+  await button(editor, "Публикация Instagram").click();
+  const details = editor.getByRole("dialog");
+  await button(details, "Общие идеи для съёмки").click();
+  await details.getByRole("button", { name: "Общие идеи для съёмки", pressed: true }).waitFor();
+  await button(details, "Редактировать карточку").click();
+  await details.getByLabel("Название").fill("Спокойное утро");
+  await details.getByLabel("Описание").fill("Планы для следующей съёмки");
+  await details.getByLabel("Автор Instagram").fill("@morning.notes");
+  await button(details, "Сохранить изменения").click();
+  await details.getByRole("heading", { name: "Спокойное утро" }).waitFor();
+  await details.getByText("Карточка обновлена.").waitFor();
+  await details.getByRole("button", { name: "Общие идеи для съёмки", pressed: true }).waitFor();
+  assert.equal(await details.locator("iframe").getAttribute("src"), "https://www.instagram.com/p/KadrEdit002/embed/");
+
+  const viewer = await signedInAs(t, "viewer");
+  await button(viewer, "Коллекции").click();
+  await button(viewer, /Общие идеи для съёмки/).click();
+  await button(viewer, "Спокойное утро").waitFor();
+  await viewer.getByText("Планы для следующей съёмки").waitFor();
+  await viewer.getByText("@morning.notes").waitFor();
+  const saved = await stack.restAs("viewer", `videos?select=id,url,views,likes,author&id=eq.${video.id}`);
+  assert.deepEqual(await saved.json(), [{
+    id: video.id, url: "https://www.instagram.com/p/KadrEdit002/", views: null, likes: null, author: "morning.notes",
+  }]);
+});
+
+async function addCatalogFixture(platform, externalId) {
+  const tiktok = platform === "tiktok";
+  const payload = {
+    p_platform: platform,
+    p_external_id: externalId,
+    p_url: tiktok ? `https://www.tiktok.com/@studio.notes/video/${externalId}` : `https://www.instagram.com/p/${externalId}/`,
+    p_author: tiktok ? "studio.notes" : "",
+    p_title: `Видео ${tiktok ? "TikTok" : "Instagram"} · ${externalId}`,
+    p_description: tiktok ? (externalId.endsWith("8") ? "Заметки о съёмке" : "Кадр из студии") : "",
+    p_hashtags: [],
+    p_published_at: "2026-11-19",
+    p_views: null,
+    p_likes: null,
+    p_collection_id: null,
+  };
+  const response = await stack.restAs("admin", "rpc/save_public_video", {
+    method: "POST", body: JSON.stringify(payload),
+  });
+  assert.equal(response.status, 200);
+  const [{ video }] = await response.json();
+  return video;
 }
