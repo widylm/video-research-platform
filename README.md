@@ -58,7 +58,31 @@ npm run cf:build
 npm run cf:preview
 ```
 
-Для публикации создайте Worker на тарифе Workers Free. Используйте имя приложения из `wrangler.jsonc` или измените его и одноимённую привязку `WORKER_SELF_REFERENCE`. Задайте обе переменные Supabase в настройках Worker как runtime variables. Для Git-интеграции используйте `npm run cf:build` как команду сборки и `npm run cf:deploy` как команду публикации. При ручной публикации выполните эти команды после настройки Worker и входа в Wrangler. Конфигурация не требует платных дополнений, хранилища файлов или отдельного фонового процесса. [Next.js on Cloudflare Workers](https://developers.cloudflare.com/workers/framework-guides/web-apps/nextjs/)
+Для публикации создайте Worker на тарифе Workers Free. Используйте имя приложения из `wrangler.jsonc` или измените его и одноимённую привязку `WORKER_SELF_REFERENCE`. Задайте обе переменные Supabase в настройках Worker как runtime variables. Для Git-интеграции используйте `npm run cf:build` как команду сборки и `npm run cf:deploy -- --keep-vars` как команду публикации. При ручной публикации выполните эти команды после настройки Worker и входа в Wrangler. Конфигурация не требует платных дополнений, хранилища файлов или отдельного фонового процесса. [Next.js on Cloudflare Workers](https://developers.cloudflare.com/workers/framework-guides/web-apps/nextjs/)
+
+### Подключение существующего Worker к Supabase
+
+Когда база и профили команды готовы, откройте **Workers & Pages → video-research-platform → Settings → Variables and Secrets**. Подготовьте обе переменные в одном обновлении Worker.
+
+| Переменная | Значение |
+| --- | --- |
+| `SUPABASE_URL` | URL проекта Supabase из диалога **Connect** |
+| `SUPABASE_PUBLISHABLE_KEY` | Ключ **Publishable** (`sb_publishable_…`) или прежний **anon** из **Project Settings → API Keys** |
+
+В Cloudflare значения можно хранить с типом **Secret**. Активация версии с обеими переменными включит вход на сайте. Ключи **Secret** и **service_role** Supabase приложение отклоняет. При следующих публикациях через CLI передавайте `npm run cf:deploy -- --keep-vars`, чтобы сохранить переменные из панели. [Переменные Worker](https://developers.cloudflare.com/workers/configuration/environment-variables/)
+
+### Тесты командного режима
+
+Потребуются Docker Compose и Chromium. Тесты запускают временные PostgreSQL, Supabase Auth, PostgREST и локальный Cloudflare Worker. Они применяют миграции, создают тестовые аккаунты и удаляют временный стек по завершении.
+
+```sh
+npm ci
+npx playwright install --with-deps chromium
+npm run cf:build
+npm run test:e2e
+```
+
+Для запуска с уже установленным Chromium задайте `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`. Тесты проверяют вход и выход, доступ по ролям, сохранение личного избранного в новой сессии и работу с общими коллекциями.
 
 ## Реальные источники данных
 

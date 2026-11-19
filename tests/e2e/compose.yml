@@ -1,0 +1,38 @@
+services:
+  db:
+    # PostgreSQL 17.12, matching the hosted Supabase project.
+    image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+    environment:
+      POSTGRES_PASSWORD: ${KADR_TEST_DB_PASSWORD:?}
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+  auth:
+    image: supabase/gotrue:v2.197.0
+    ports: ["127.0.0.1::9999"]
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: http://localhost
+      GOTRUE_SITE_URL: http://localhost
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_NAMESPACE: auth
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:${KADR_TEST_DB_PASSWORD:?}@db:5432/postgres?search_path=auth
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_SECRET: ${KADR_TEST_JWT_SECRET:?}
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+  rest:
+    image: postgrest/postgrest:v14.18
+    ports: ["127.0.0.1::3000"]
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${KADR_TEST_REST_PASSWORD:?}@db:5432/postgres
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${KADR_TEST_JWT_SECRET:?}
