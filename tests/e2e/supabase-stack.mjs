@@ -138,7 +138,8 @@ export async function startSupabaseStack() {
       readFile(join(repo, "supabase/migrations/20261118000100_initial_schema.sql"), "utf8"),
       readFile(join(repo, "supabase/migrations/20261118000200_mock_catalog.sql"), "utf8"),
     ]);
-    sql(["begin;", ...migrations, "commit;", "notify pgrst, 'reload schema';"].join("\n"));
+    sql(["begin;", ...migrations, "commit;"].join("\n"));
+    sql(await readFile(join(repo, "supabase/migrations/20261119000100_saved_public_videos.sql"), "utf8"));
 
     const profiles = {
       admin: "Администратор тестовой команды",
@@ -188,17 +189,20 @@ export async function startSupabaseStack() {
     });
 
     async function restAs(role, path, options = {}) {
-      const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-        method: "POST",
-        headers: { apikey: anonKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ email: users[role].email, password: users[role].password }),
-      });
-      const { access_token: token } = await response.json();
-      if (!response.ok || typeof token !== "string") throw new Error(`No session for test role ${role}`);
+      let token = anonKey;
+      if (role !== "anon") {
+        const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+          method: "POST",
+          headers: { apikey: anonKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ email: users[role].email, password: users[role].password }),
+        });
+        ({ access_token: token } = await response.json());
+        if (!response.ok || typeof token !== "string") throw new Error(`No session for test role ${role}`);
+      }
 
       return fetch(`${supabaseUrl}/rest/v1/${path}`, {
         ...options,
-        headers: { apikey: anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { ...options.headers, apikey: anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
     }
 

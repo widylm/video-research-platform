@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { parseVideoLink } from "@/lib/public-video-url";
+import { optionalPublicationDate } from "@/lib/video-entry";
 
 export const platforms = ["tiktok", "instagram"] as const;
 export const platformNames = { tiktok: "TikTok", instagram: "Instagram" };
@@ -13,9 +15,9 @@ export interface Video {
   title: string;
   description: string;
   hashtags: string[];
-  publishedAt: string;
-  views: number;
-  likes: number;
+  publishedAt: string | null;
+  views: number | null;
+  likes: number | null;
   cover: string;
   isMock: boolean;
 }
@@ -27,16 +29,16 @@ export const sortOptions = {
 } as const;
 export type Sort = keyof typeof sortOptions;
 
-const publicationDate = z.union([z.literal(""), z.iso.date()]);
+const minimum = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
 export const searchSchema = z.object({
   platform: z.enum(["all", ...platforms]),
   keywords: z.string().trim().max(200),
   hashtags: z.string().trim().max(200),
-  from: publicationDate,
-  to: publicationDate,
+  from: optionalPublicationDate,
+  to: optionalPublicationDate,
   limit: z.number().int().min(1).max(100),
-  minViews: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
-  minLikes: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  minViews: minimum,
+  minLikes: minimum,
   sort: z.enum(["recent", "views", "likes"]),
 }).refine(({ from, to }) => !from || !to || from <= to, {
   error: "Дата начала должна быть раньше даты окончания или совпадать с ней.",
@@ -51,39 +53,25 @@ export const defaultSearch: SearchQuery = {
   from: "",
   to: "",
   limit: 24,
-  minViews: 0,
-  minLikes: 0,
+  minViews: null,
+  minLikes: null,
   sort: "recent",
 };
 
 export function sortVideos(videos: Video[], sort: Sort): Video[] {
   return [...videos].sort((a, b) => {
-    const metric = sort === "views" ? b.views - a.views : sort === "likes" ? b.likes - a.likes : 0;
-    return metric || b.publishedAt.localeCompare(a.publishedAt) || a.id.localeCompare(b.id);
+    const metric = sort === "views" ? (b.views ?? -1) - (a.views ?? -1)
+      : sort === "likes" ? (b.likes ?? -1) - (a.likes ?? -1) : 0;
+    return metric || (b.publishedAt ?? "").localeCompare(a.publishedAt ?? "") || a.id.localeCompare(b.id);
   });
 }
 
 export function officialEmbed(video: Pick<Video, "platform" | "url" | "isMock">): string | null {
   if (video.isMock || !video.url) return null;
+  const link = parseVideoLink(video.url);
+  if (link?.kind !== "video" || link.video.platform !== video.platform) return null;
 
-  let url: URL;
-  try {
-    url = new URL(video.url);
-  } catch {
-    return null;
-  }
-
-  if (url.protocol !== "https:" || url.port || url.username || url.password) return null;
-  const host = url.hostname;
-  if (video.platform === "tiktok" && ["www.tiktok.com", "tiktok.com"].includes(host)) {
-    const match = /^\/@[\w.]+\/video\/(\d{8,25})\/?$/.exec(url.pathname);
-    return match ? `https://www.tiktok.com/player/v1/${match[1]}` : null;
-  }
-
-  if (video.platform === "instagram" && ["www.instagram.com", "instagram.com"].includes(host)) {
-    const match = /^\/(p|reel|tv)\/([\w-]{1,64})\/?$/.exec(url.pathname);
-    return match ? `https://www.instagram.com/${match[1]}/${match[2]}/embed/` : null;
-  }
-
-  return null;
+  return link.video.platform === "tiktok"
+    ? `https://www.tiktok.com/player/v1/${link.video.externalId}`
+    : `${link.video.url}embed/`;
 }

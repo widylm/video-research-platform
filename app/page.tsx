@@ -3,7 +3,7 @@ import { Dashboard } from "@/components/dashboard";
 import { emptyLibrary } from "@/lib/library";
 import { searchVideos } from "@/lib/providers";
 import { defaultSearch } from "@/lib/videos";
-import { readLibrary, workspace } from "@/lib/workspace";
+import { readLibrary, searchCatalog, workspace } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +12,7 @@ export default async function Home() {
   if (session.mode === "locked") redirect("/login");
 
   const [videos, library] = await Promise.all([
-    searchVideos(defaultSearch),
+    session.mode === "team" ? searchCatalog(session.supabase, defaultSearch) : searchVideos(defaultSearch),
     session.mode === "team" ? readLibrary(session.supabase) : emptyLibrary,
   ]);
 

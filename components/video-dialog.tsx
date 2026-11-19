@@ -1,18 +1,20 @@
 "use client";
 
 import Image from "next/image";
-import { BookmarkPlus, Check, ExternalLink, X } from "lucide-react";
+import { BookmarkPlus, Check, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { Collection } from "@/lib/library";
-import { officialEmbed, platformNames, type Video } from "@/lib/videos";
+import { officialEmbed, type Video } from "@/lib/videos";
+import { EmbeddedVideo } from "./embedded-video";
 import { PlatformBadge, VideoMetrics } from "./video-results";
 
-export function VideoDialog({ video, collections, canEdit, busy, error, onClose, onToggle }: {
+export function VideoDialog({ video, collections, canEdit, busy, error, notice, onClose, onToggle }: {
   video: Video;
   collections: Collection[];
   canEdit: boolean;
   busy: boolean;
   error: string;
+  notice: string;
   onClose: () => void;
   onToggle: (collection: Collection, saved: boolean) => void;
 }) {
@@ -33,15 +35,14 @@ export function VideoDialog({ video, collections, canEdit, busy, error, onClose,
         <button className="icon-button" aria-label="Закрыть" onClick={onClose}><X size={20} /></button>
       </div>
       <h2 id="video-title">{video.title}</h2>
-      <p className="video-author">@{video.author}</p>
-      {embedSrc ? <iframe className="official-embed" src={embedSrc} title={`Видео ${platformNames[video.platform]}`}
-        allow="encrypted-media; fullscreen; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" />
-        : <div className="dialog-cover"><Image src={video.cover} alt="" fill sizes="(max-width: 640px) 100vw, 600px" /></div>}
-      {embedSrc && <a href={video.url ?? embedSrc} target="_blank" rel="noreferrer"
-        className="external-link">Открыть в {platformNames[video.platform]} <ExternalLink size={15} /></a>}
+      {video.author && <p className="video-author">@{video.author}</p>}
+      {notice && <p className="video-demo" role="status">{notice}</p>}
+      {embedSrc ? <EmbeddedVideo video={video} src={embedSrc} />
+        : video.cover ? <div className="dialog-cover"><Image src={video.cover} alt="" fill sizes="(max-width: 640px) 100vw, 600px" /></div>
+          : <p className="notice error" role="status">Ссылка на встроенный плеер недоступна.</p>}
       {video.isMock && <p className="video-demo">Демонстрационная карточка · иллюстрация из фотостока</p>}
       <VideoMetrics video={video} full />
-      <p className="video-description">{video.description}</p>
+      {video.description && <p className="video-description">{video.description}</p>}
       <div className="tags">{video.hashtags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
       {canEdit && <div className="dialog-collections">
         <h3><BookmarkPlus size={18} /> Коллекции</h3>

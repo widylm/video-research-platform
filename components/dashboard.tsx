@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  ChevronRight, CircleUserRound, FlaskConical, Folder, Heart, LogOut, Search, Users,
+  ChevronRight, CircleUserRound, FlaskConical, Folder, Heart, LogOut, Plus, Search, Users,
 } from "lucide-react";
 import { useEffect, useState, useTransition } from "react";
 import { z } from "zod";
@@ -9,6 +9,7 @@ import { refreshLibrary, runSearch, signOut, updateLibrary } from "@/app/actions
 import { libraryCommand, type Library, type LibraryCommand } from "@/lib/library";
 import type { Profile } from "@/lib/supabase";
 import { defaultSearch, sortVideos, type SearchQuery, type Sort, type Video } from "@/lib/videos";
+import { AddVideoDialog } from "./add-video-dialog";
 import { Brand } from "./brand";
 import { Collections } from "./collections";
 import { SearchForm } from "./search-form";
@@ -69,6 +70,8 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
   const [view, setView] = useState<"grid" | "table">("grid");
   const [librarySort, setLibrarySort] = useState<Sort>("recent");
   const [selected, setSelected] = useState<Video | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [saveNotice, setSaveNotice] = useState("");
   const [collectionId, setCollectionId] = useState<string>();
   const [error, setError] = useState("");
   const [busy, startTransition] = useTransition();
@@ -89,11 +92,11 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
     setLibrary({ ...(saved ?? initialLibrary), videos });
   }, [initialLibrary, initialVideos, profile]);
 
-  function search(query: SearchQuery) {
+  function search(query: SearchQuery, record = true) {
     setError("");
     startTransition(async () => {
       try {
-        const result = await runSearch(query);
+        const result = await runSearch(query, record);
         if ("error" in result) setError(result.error);
         else {
           setApplied(query);
@@ -161,6 +164,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
     setSection(next);
     setCollectionId(undefined);
     setError("");
+    if (next === "search" && profile) search(applied, false);
     if (next !== "search") reload();
   }
 
@@ -210,15 +214,19 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
       </header>
 
       <main className="main-content">
-        <div className="page-title">
-          <h1>{title}</h1>
-          <p>{activeCollection
-            ? (activeCollection.shared ? "Коллекция для команды" : "Личная коллекция")
-            : sections[section].subtitle}</p>
+        <div className="page-heading">
+          <div className="page-title">
+            <h1>{title}</h1>
+            <p>{activeCollection ? (activeCollection.shared ? "Коллекция для команды" : "Личная коллекция")
+              : section === "search" && profile ? "Ищите видео, сохранённые в каталоге команды."
+                : sections[section].subtitle}</p>
+          </div>
+          {profile && canEdit && <button className="button primary" type="button" disabled={sessionBusy}
+            onClick={() => setAdding(true)}><Plus size={18} /> Добавить видео</button>}
         </div>
 
         {section === "search" && <SearchForm
-          query={draft} busy={sessionBusy} onChange={setDraft}
+          query={draft} demo={!profile} busy={sessionBusy} onChange={setDraft}
           onSearch={(query) => {
             setDraft(query);
             search(query === defaultSearch ? defaultSearch : { ...query, sort: applied.sort });
@@ -245,7 +253,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
 
         {error && !selected && <p className="notice error" role="alert">{error}</p>}
         {(section !== "collections" || activeCollection) && <section className="results-section" aria-label="Видео">
-          {section === "search" && <h2>Результаты поиска</h2>}
+          {section === "search" && <h2>{profile ? "Результаты по каталогу" : "Результаты поиска"}</h2>}
           <VideoResults
             videos={sorted} favorites={library.favorites} view={view}
             sort={section === "search" ? applied.sort : librarySort} busy={sessionBusy}
@@ -258,6 +266,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
             }}
             onOpen={(video) => {
               setError("");
+              setSaveNotice("");
               setSelected(video);
             }}
             onFavorite={(video) => save({ kind: "favorite", videoId: video.id, saved: !library.favorites.includes(video.id) })}
@@ -266,8 +275,18 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
       </main>
     </div>
 
-    {selected && <VideoDialog
-      video={selected} collections={library.collections} canEdit={canEdit} busy={sessionBusy} error={error}
+    {adding && <AddVideoDialog collections={library.collections} collectionId={collectionId}
+      onClose={() => setAdding(false)}
+      onSaved={(video, created) => {
+        setAdding(false);
+        setSaveNotice(created ? "Видео сохранено в каталоге." : "Это видео уже в каталоге. Открыта существующая карточка.");
+        setSelected(video);
+        search(applied, false);
+        reload();
+      }}
+    />}
+    {selected && <VideoDialog key={selected.id}
+      video={selected} collections={library.collections} canEdit={canEdit} busy={sessionBusy} error={error} notice={saveNotice}
       onClose={() => {
         setSelected(null);
         setError("");
