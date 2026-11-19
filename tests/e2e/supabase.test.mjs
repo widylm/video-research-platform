@@ -516,10 +516,10 @@ test("editors manage manual covers and viewers see them in the catalog and colle
 
   const card = (page, video) => page.locator("article").filter({ has: button(page, video.title) });
   const visibleCover = (page, video) => card(page, video).locator(".video-cover img");
-  const tikCover = visibleCover(editor, tikTok);
+  const manualCover = (page, video) => visibleCover(page, video).and(page.locator(`img[src^="${coverPath(video)}?v="]`));
+  const tikCover = visibleCover(editor, tikTok).and(editor.locator(`img[src="${original}"]`));
   await card(editor, tikTok).scrollIntoViewIfNeeded();
   await tikCover.waitFor();
-  assert.equal(await tikCover.getAttribute("src"), original);
   assert.equal(await card(editor, instagram).locator(".video-cover, iframe").count(), 0);
 
   for (const video of [tikTok, instagram]) {
@@ -531,13 +531,16 @@ test("editors manage manual covers and viewers see them in the catalog and colle
     const upload = dialog.getByLabel("Файл обложки");
     await upload.setInputFiles({ name: "wrong.png", mimeType: "image/png", buffer: Buffer.from("<svg/>") });
     await dialog.getByText("Выберите изображение JPEG, PNG или WebP.").waitFor();
+    const saved = editor.waitForResponse((response) => response.url().endsWith(coverPath(video))
+      && response.request().method() === "PUT");
     await upload.setInputFiles({ name: "cover.png", mimeType: "image/png", buffer: await picture(editor, "image/png", "orange") });
+    const response = await saved;
+    assert.ok(response.ok(), await response.text());
     await dialog.getByText("Обложка сохранена.", { exact: true }).waitFor();
+    await button(dialog, "Заменить обложку").waitFor();
     await button(dialog, "Закрыть").click();
-    const cover = visibleCover(editor, video);
     await card(editor, video).scrollIntoViewIfNeeded();
-    await cover.waitFor();
-    assert.ok((await cover.getAttribute("src")).startsWith(coverPath(video) + "?v="));
+    await manualCover(editor, video).waitFor();
   }
   assert.equal(await editor.locator("article iframe").count(), 0);
   assert.equal(await editor.evaluate(() => document.documentElement.scrollWidth), 390);
@@ -547,9 +550,7 @@ test("editors manage manual covers and viewers see them in the catalog and colle
   await button(viewer, "Коллекции").click();
   await button(viewer, /Видео с командными обложками/).click();
   for (const video of [tikTok, instagram]) {
-    const cover = visibleCover(viewer, video);
-    await cover.waitFor();
-    assert.ok((await cover.getAttribute("src")).startsWith(coverPath(video) + "?v="));
+    await manualCover(viewer, video).waitFor();
   }
   await button(viewer, instagram.title).click();
   await button(viewer.getByRole("dialog"), "Заменить обложку").waitFor({ state: "hidden" });
@@ -574,7 +575,6 @@ test("editors manage manual covers and viewers see them in the catalog and colle
   await dialog.getByText("Ручная обложка удалена.").waitFor();
   await button(dialog, "Закрыть").click();
   await tikCover.waitFor();
-  assert.equal(await tikCover.getAttribute("src"), original);
 
   await button(editor, instagram.title).click();
   await button(dialog, "Удалить обложку").click();
@@ -593,6 +593,7 @@ test("cover upload enforces authorization, origin, canonical paths and image lim
   const headers = { Origin: stack.appUrl, "Content-Type": "image/jpeg" };
   const forged = Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>");
   assert.equal((await editor.request.put(url, { headers: { ...headers, Origin: "https://example.com" }, data: bytes })).status(), 403);
+  assert.equal((await editor.request.put(url, { headers: { ...headers, "Sec-Fetch-Site": "cross-site" }, data: bytes })).status(), 403);
   assert.equal((await editor.request.put(url, { headers, data: forged })).status(), 422);
   assert.equal((await editor.request.put(url, { headers, data: Buffer.alloc(coverMaxBytes + 1) })).status(), 413);
   const sizeMarker = bytes.indexOf(Buffer.from([0xff, 0xc0]));

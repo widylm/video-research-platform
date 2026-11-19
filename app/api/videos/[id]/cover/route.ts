@@ -68,8 +68,24 @@ async function readCover(request: Request) {
   }
 }
 
+function isSameOrigin(request: Request) {
+  const fetchSite = request.headers.get("sec-fetch-site");
+  if (fetchSite && fetchSite !== "same-origin") return false;
+
+  // OpenNext can reconstruct the URL with an internal scheme. Use the incoming host.
+  const origin = request.headers.get("origin");
+  if (!origin) return false;
+  try {
+    const source = new URL(origin);
+    return source.origin === origin && (source.protocol === "https:" || source.protocol === "http:")
+      && source.host === request.headers.get("host");
+  } catch {
+    return false;
+  }
+}
+
 export async function PUT(request: Request, params: Params) {
-  if (request.headers.get("origin") !== new URL(request.url).origin) return error("Запрос отклонён.", 403);
+  if (!isSameOrigin(request)) return error("Запрос отклонён.", 403);
   try {
     const access = await coverAccess(params, true);
     if (access instanceof Response) return access;
@@ -88,7 +104,7 @@ export async function PUT(request: Request, params: Params) {
 }
 
 export async function DELETE(request: Request, params: Params) {
-  if (request.headers.get("origin") !== new URL(request.url).origin) return error("Запрос отклонён.", 403);
+  if (!isSameOrigin(request)) return error("Запрос отклонён.", 403);
   try {
     const access = await coverAccess(params, true);
     if (access instanceof Response) return access;
