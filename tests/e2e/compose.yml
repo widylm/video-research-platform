@@ -36,3 +36,19 @@ services:
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${KADR_TEST_JWT_SECRET:?}
+  storage:
+    image: supabase/storage-api:v1.89.12
+    ports: ["127.0.0.1::5000"]
+    environment:
+      DATABASE_URL: postgres://postgres:${KADR_TEST_DB_PASSWORD:?}@db:5432/postgres
+      POSTGREST_URL: http://rest:3000
+      AUTH_JWT_SECRET: ${KADR_TEST_JWT_SECRET:?}
+      ANON_KEY: ${KADR_TEST_ANON_KEY:?}
+      SERVICE_KEY: ${KADR_TEST_SERVICE_KEY:?}
+      DB_INSTALL_ROLES: "true"
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      FILE_SIZE_LIMIT: 52428800
+      GLOBAL_S3_BUCKET: kadr-local
+      TENANT_ID: local
+      REGION: local

@@ -72,7 +72,6 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
   const [selected, setSelected] = useState<Video | null>(null);
   const [selectedPreview, setSelectedPreview] = useState<VideoPreview>();
   const [adding, setAdding] = useState(false);
-  const [catalogFrames, setCatalogFrames] = useState(true);
   const [saveNotice, setSaveNotice] = useState("");
   const [collectionId, setCollectionId] = useState<string>();
   const [error, setError] = useState("");
@@ -257,7 +256,6 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
         {(section !== "collections" || activeCollection) && <section className="results-section" aria-label="Видео">
           {section === "search" && <h2>{profile ? "Результаты по каталогу" : "Результаты поиска"}</h2>}
           <VideoResults key={activeCollection?.id ?? section}
-            showCatalogFrames={catalogFrames} onCatalogFramesChange={setCatalogFrames} pauseCatalogFrames={Boolean(selected || adding)}
             videos={sorted} favorites={library.favorites} view={view}
             sort={section === "search" ? applied.sort : librarySort} busy={sessionBusy}
             emptyHint={section === "search" ? "Измените параметры поиска или сбросьте фильтры."
@@ -297,13 +295,13 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
         setSelected(null);
         setError("");
       }}
-      onUpdated={(video) => {
+      onUpdated={(video, change) => {
         setSelected(video);
         setVideos((list) => list.map((entry) => entry.id === video.id ? video : entry));
         setLibrary((current) => current.videos[video.id]
           ? { ...current, videos: { ...current.videos, [video.id]: video } } : current);
-        setSaveNotice("Карточка обновлена.");
-        if (section === "search") search(applied, false);
+        setSaveNotice(change === "details" ? "Карточка обновлена." : "");
+        if (change === "details" && section === "search") search(applied, false);
       }}
       onToggle={(collection, saved) => save({
         kind: "item", collectionId: collection.id, videoId: selected.id, saved,
