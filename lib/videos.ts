@@ -19,6 +19,7 @@ export interface Video {
   views: number | null;
   likes: number | null;
   cover: string;
+  coverRevision?: string;
   isMock: boolean;
 }
 
@@ -93,10 +94,4 @@ export function officialEmbed(video: Pick<Video, "platform" | "url" | "isMock">)
   return link.video.platform === "tiktok"
     ? `https://www.tiktok.com/player/v1/${link.video.externalId}`
     : `${link.video.url}embed/`;
-}
-
-export function officialCatalogFrame(video: Pick<Video, "platform" | "url" | "isMock">): string | null {
-  if (video.platform !== "tiktok") return null;
-  const src = officialEmbed(video);
-  return src ? `${src}?autoplay=0&controls=0&rel=0` : null;
 }

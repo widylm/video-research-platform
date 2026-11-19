@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright";
+import { coverMaxBytes } from "../../lib/video-cover.ts";
 import { startSupabaseStack } from "./supabase-stack.mjs";
 
 const loginTitle = "Вход в рабочее пространство";
@@ -297,7 +298,7 @@ async function testPublicVideoAccess() {
   assert.deepEqual(await outsider.json(), []);
 }
 
-test("catalog cards prefer a cover, show a paused TikTok frame and open Instagram on demand", { timeout: 55_000 }, async (t) => {
+test("catalog cards use a loaded official cover and only open player if requested", { timeout: 55_000 }, async (t) => {
   const video = await addCatalogFixture("tiktok", "1234567890123456789");
   const broken = await addCatalogFixture("tiktok", "1234567890123456788");
   const instagram = await addCatalogFixture("instagram", "KadrPreview01", { p_hashtags: ["сценография"] });
@@ -344,16 +345,11 @@ test("catalog cards prefer a cover, show a paused TikTok frame and open Instagra
   await fallback.locator("img").waitFor({ state: "hidden" });
   assert.equal(await fallback.getByRole("heading").textContent(), "Заметки о съёмке");
 
-  const staticFrame = fallback.locator('iframe.catalog-frame[data-ready="true"]');
-  await staticFrame.waitFor();
-  assert.equal(await staticFrame.getAttribute("allow"), "autoplay 'none'");
-  const params = new URL(await staticFrame.getAttribute("src")).searchParams;
-  assert.equal(params.get("autoplay"), "0");
-  assert.equal(params.get("controls"), "0");
-  assert.equal(await tik.locator("iframe").count(), 0);
+  await fallback.hover();
+  assert.equal(await fallback.locator(".video-cover").count(), 0);
+  assert.equal(await page.locator("article iframe").count(), 0);
 
   await button(tik, "Предпросмотр").click();
-  await staticFrame.waitFor({ state: "detached" });
   assert.match(await tik.locator("iframe").getAttribute("src"), /tiktok\.com\/player\/v1\//);
   const ig = cards.filter({ has: button(page, "Публикация Instagram") });
   await ig.getByText("Автор не указан").waitFor();
@@ -450,55 +446,6 @@ async function addCatalogFixture(platform, externalId, overrides = {}) {
   return video;
 }
 
-test("automatic TikTok frames are limited to visible cards and honor the traffic preference", { timeout: 65_000 }, async (t) => {
-  await Promise.all(Array.from({ length: 8 }, (_, index) => addCatalogFixture("tiktok", `192345678901234567${index}`, {
-    p_title: `Серия кадров ${index}`,
-    p_published_at: `2026-11-2${8 - index}`,
-  })));
-  const page = await signedInAs(t, "viewer");
-  await page.setViewportSize({ width: 1500, height: 960 });
-  await page.getByLabel("Ключевые слова").fill("Серия кадров");
-  await button(page, "Найти видео").click();
-  await page.getByText("Найдено: 8", { exact: true }).waitFor();
-  const frames = page.locator("iframe.catalog-frame");
-  const cards = page.locator("article");
-  const first = cards.filter({ has: button(page, "Серия кадров 0") });
-  await first.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelectorAll('iframe.catalog-frame[data-ready="true"]').length === 2);
-  assert.equal(await frames.count(), 2);
-  const laterDesktop = cards.filter({ has: button(page, "Серия кадров 3") });
-  await laterDesktop.hover();
-  await laterDesktop.locator('iframe.catalog-frame[data-ready="true"]').waitFor();
-  assert.equal(await frames.count(), 2);
-
-  await page.setViewportSize({ width: 390, height: 540 });
-  const later = cards.filter({ has: button(page, "Серия кадров 4") });
-  await later.evaluate((card) => card.scrollIntoView({ block: "start" }));
-  await page.waitForFunction(() => document.querySelectorAll("iframe.catalog-frame").length === 1);
-  await later.locator('iframe.catalog-frame[data-ready="true"]').waitFor();
-  assert.equal(await first.locator("iframe").count(), 0);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
-
-  const toggle = button(page, "Кадры в сетке");
-  await toggle.click();
-  await frames.first().waitFor({ state: "detached" });
-  assert.equal(await toggle.getAttribute("aria-pressed"), "false");
-  await toggle.click();
-  await first.scrollIntoViewIfNeeded();
-  await first.locator('iframe.catalog-frame[data-ready="true"]').waitFor();
-
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "connection", {
-      value: Object.assign(new EventTarget(), { saveData: true }),
-    });
-  });
-  await page.reload();
-  await toggle.waitFor();
-  assert.equal(await toggle.getAttribute("aria-pressed"), "false");
-  assert.equal(await toggle.isDisabled(), true);
-  assert.equal(await frames.count(), 0);
-});
-
 test("TikTok errors stay out of grid cards and the original link remains available", { timeout: 35_000 }, async (t) => {
   const externalId = "1299999999999999999";
   await addCatalogFixture("tiktok", externalId, {
@@ -507,10 +454,11 @@ test("TikTok errors stay out of grid cards and the original link remains availab
     p_hashtags: ["монтаж"],
   });
   const page = await loginPage(t);
-  const passiveRequest = page.waitForRequest((request) => (
-    request.url().includes(`/player/v1/${externalId}?`) && request.url().includes("autoplay=0")
-  ));
-  await page.route(`https://www.tiktok.com/player/v1/${externalId}*`, (route) => tikTokPlayer(route, 2001));
+  let requests = 0;
+  await page.route(`https://www.tiktok.com/player/v1/${externalId}*`, (route) => {
+    requests += 1;
+    return tikTokPlayer(route, 2001);
+  });
   await submitLogin(page, "viewer");
   await page.waitForURL(stack.appUrl + "/");
   await page.getByLabel("Ключевые слова").fill("Идея для монтажа");
@@ -518,13 +466,174 @@ test("TikTok errors stay out of grid cards and the original link remains availab
   await page.getByText("Найдено: 1", { exact: true }).waitFor();
   const card = page.locator("article").filter({ has: button(page, "Идея для монтажа") });
   await card.scrollIntoViewIfNeeded();
-  await passiveRequest;
-  await card.locator("iframe").waitFor({ state: "detached" });
+  assert.equal(await card.locator("iframe, .video-cover").count(), 0);
+  assert.equal(requests, 0);
   await card.getByText("Ритм и смена ракурсов").waitFor();
   await card.getByText("#монтаж").waitFor();
 
   await button(card, "Предпросмотр").click();
   await card.getByText("Ролик можно открыть на платформе.").waitFor();
+  assert.equal(requests, 1);
   assert.equal(await card.locator("iframe").count(), 0);
   await card.getByRole("link", { name: "Открыть в TikTok" }).waitFor();
+});
+
+async function picture(page, type, color) {
+  return Buffer.from(await page.evaluate(async ({ type, color }) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 48;
+    canvas.height = 32;
+    const paint = canvas.getContext("2d");
+    paint.fillStyle = color;
+    paint.fillRect(0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, type));
+    return Array.from(new Uint8Array(await blob.arrayBuffer()));
+  }, { type, color }));
+}
+
+const coverPath = (video) => `/api/videos/${video.id}/cover`;
+
+test("editors manage manual covers and viewers see them in the catalog and collections", { timeout: 85_000 }, async (t) => {
+  const title = "Кадры с ручной обложкой";
+  const tikTok = await addCatalogFixture("tiktok", "1999999999999999999", { p_title: `${title} TikTok` });
+  const instagram = await addCatalogFixture("instagram", "KadrManualCover01", { p_title: `${title} Instagram` });
+
+  const editor = await signedInAs(t, "member");
+  await editor.setViewportSize({ width: 390, height: 844 });
+  const original = "https://p16-sign-sg.tiktokcdn.com/official-cover.jpg";
+  const officialBytes = await picture(editor, "image/jpeg", "green");
+  await editor.route(`**/api/videos/${tikTok.id}/preview`, (route) => route.fulfill({ json: { thumbnailUrl: original } }));
+  await editor.route(original, (route) => route.fulfill({ contentType: "image/jpeg", body: officialBytes }));
+  await editor.route("https://www.instagram.com/p/KadrManualCover01/embed/", (route) => route.fulfill({ body: "Instagram iframe" }));
+  await button(editor, "Коллекции").click();
+  await editor.getByLabel("Название").fill("Видео с командными обложками");
+  await button(editor, "Создать").click();
+  await button(editor, /Видео с командными обложками/).waitFor();
+  await button(editor, "Поиск видео").click();
+  await editor.getByLabel("Ключевые слова").fill(title);
+  await button(editor, "Найти видео").click();
+  await editor.getByText("Найдено: 2", { exact: true }).waitFor();
+
+  const card = (page, video) => page.locator("article").filter({ has: button(page, video.title) });
+  const visibleCover = (page, video) => card(page, video).locator(".video-cover img");
+  const manualCover = (page, video) => visibleCover(page, video).and(page.locator(`img[src*="${coverPath(video)}?v="]`));
+  const tikCover = visibleCover(editor, tikTok).and(editor.locator(`img[src="${original}"]`));
+  await card(editor, tikTok).scrollIntoViewIfNeeded();
+  await tikCover.waitFor();
+  assert.equal(await card(editor, instagram).locator(".video-cover, iframe").count(), 0);
+
+  for (const video of [tikTok, instagram]) {
+    await button(editor, video.title).click();
+    const dialog = editor.getByRole("dialog");
+    await button(dialog, "Видео с командными обложками").click();
+    await dialog.getByRole("button", { name: "Видео с командными обложками", pressed: true }).waitFor();
+    await button(dialog, "Добавить обложку").waitFor();
+    const upload = dialog.getByLabel("Файл обложки");
+    await upload.setInputFiles({ name: "wrong.png", mimeType: "image/png", buffer: Buffer.from("<svg/>") });
+    await dialog.getByText("Выберите изображение JPEG, PNG или WebP.").waitFor();
+    const saved = editor.waitForResponse((response) => response.url().endsWith(coverPath(video))
+      && response.request().method() === "PUT");
+    await upload.setInputFiles({ name: "cover.png", mimeType: "image/png", buffer: await picture(editor, "image/png", "orange") });
+    const response = await saved;
+    assert.ok(response.ok(), await response.text());
+    await dialog.getByText("Обложка сохранена.", { exact: true }).waitFor();
+    await button(dialog, "Заменить обложку").waitFor();
+    await button(dialog, "Закрыть").click();
+    await card(editor, video).scrollIntoViewIfNeeded();
+    await manualCover(editor, video).waitFor();
+  }
+  assert.equal(await editor.locator("article iframe").count(), 0);
+  assert.equal(await editor.evaluate(() => document.documentElement.scrollWidth), 390);
+
+  const viewer = await signedInAs(t, "viewer");
+  await viewer.route("https://www.instagram.com/p/KadrManualCover01/embed/", (route) => route.fulfill({ body: "Instagram iframe" }));
+  await button(viewer, "Коллекции").click();
+  await button(viewer, /Видео с командными обложками/).click();
+  for (const video of [tikTok, instagram]) {
+    await manualCover(viewer, video).waitFor();
+  }
+  await button(viewer, instagram.title).click();
+  await button(viewer.getByRole("dialog"), "Заменить обложку").waitFor({ state: "hidden" });
+
+  const read = () => viewer.request.get(stack.appUrl + coverPath(tikTok));
+  const previous = await read();
+  assert.equal(previous.status(), 200);
+  assert.equal(previous.headers()["content-type"], "image/jpeg");
+  assert.equal(previous.headers()["cache-control"], "private, no-store");
+  assert.equal(previous.headers()["x-content-type-options"], "nosniff");
+
+  await button(editor, tikTok.title).click();
+  const dialog = editor.getByRole("dialog");
+  await button(dialog, "Заменить обложку").waitFor();
+  await dialog.getByLabel("Файл обложки").setInputFiles({
+    name: "replacement.webp", mimeType: "image/webp", buffer: await picture(editor, "image/webp", "blue"),
+  });
+  await dialog.getByText("Обложка сохранена.", { exact: true }).waitFor();
+  assert.notDeepEqual(await (await read()).body(), await previous.body());
+
+  await button(dialog, "Удалить обложку").click();
+  await dialog.getByText("Ручная обложка удалена.").waitFor();
+  await button(dialog, "Закрыть").click();
+  await tikCover.waitFor();
+
+  await button(editor, instagram.title).click();
+  await button(dialog, "Удалить обложку").click();
+  await dialog.getByText("Ручная обложка удалена.").waitFor();
+  await button(dialog, "Закрыть").click();
+  assert.equal(await card(editor, instagram).locator(".video-cover, iframe").count(), 0);
+  await button(card(editor, instagram), "Предпросмотр").click();
+  assert.equal(await card(editor, instagram).locator("iframe").getAttribute("src"), "https://www.instagram.com/p/KadrManualCover01/embed/");
+});
+
+test("cover upload enforces authorization, origin, canonical paths and image limits", { timeout: 70_000 }, async (t) => {
+  const video = await addCatalogFixture("instagram", "KadrCoverRls");
+  const editor = await signedInAs(t, "admin");
+  const bytes = await picture(editor, "image/jpeg", "salmon");
+  const url = stack.appUrl + coverPath(video);
+  const headers = { Origin: stack.appUrl, "Content-Type": "image/jpeg" };
+  const forged = Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>");
+  assert.equal((await editor.request.put(url, { headers: { ...headers, Origin: "https://example.com" }, data: bytes })).status(), 403);
+  assert.equal((await editor.request.put(url, { headers: { ...headers, "Sec-Fetch-Site": "cross-site" }, data: bytes })).status(), 403);
+  assert.equal((await editor.request.put(url, { headers, data: forged })).status(), 422);
+  assert.equal((await editor.request.put(url, { headers, data: Buffer.alloc(coverMaxBytes + 1) })).status(), 413);
+  const sizeMarker = bytes.indexOf(Buffer.from([0xff, 0xc0]));
+  assert.ok(sizeMarker > 0);
+  const oversizedDimensions = Buffer.from(bytes);
+  oversizedDimensions.writeUInt16BE(1281, sizeMarker + 7);
+  assert.equal((await editor.request.put(url, { headers, data: oversizedDimensions })).status(), 422);
+
+  const demo = "69000000-0000-4000-8000-000000000001";
+  assert.equal((await editor.request.put(`${stack.appUrl}/api/videos/${demo}/cover`, { headers, data: bytes })).status(), 404);
+  const store = (role, path, data = bytes, type = "image/jpeg") => stack.storageAs(role, `object/video-covers/${path}`, {
+    method: "POST", headers: { "Content-Type": type, "x-upsert": "true" }, body: data,
+  });
+  for (const path of [`${demo}.jpg`, `${video.id}.png`, `folder/${video.id}.jpg`, "00000000-0000-4000-8000-000000000000.jpg"]) {
+    assert.equal((await store("member", path)).ok, false);
+  }
+  const path = `${video.id}.jpg`;
+  assert.equal((await store("member", path, forged, "image/svg+xml")).ok, false);
+  assert.equal((await store("member", path, Buffer.alloc(coverMaxBytes + 1))).ok, false);
+  assert.equal((await editor.request.put(url, { headers, data: bytes })).status(), 200);
+  assert.equal((await fetch(url)).status, 401);
+  for (const role of ["viewer", "outsider", "anon"]) {
+    assert.equal((await store(role, path)).ok, false);
+    const read = await stack.storageAs(role, `object/authenticated/video-covers/${path}`);
+    assert.equal(read.ok, role === "viewer");
+  }
+  const readVersions = (role) => stack.restAs(role, "rpc/saved_video_cover_versions", {
+    method: "POST", body: JSON.stringify({ video_ids: [video.id] }),
+  });
+  assert.equal((await (await readVersions("viewer")).json())[0].id, video.id);
+  assert.deepEqual(await (await readVersions("outsider")).json(), []);
+  assert.equal((await readVersions("anon")).ok, false);
+  const viewer = await signedInAs(t, "viewer");
+  assert.equal((await viewer.request.put(url, { headers, data: bytes })).status(), 403);
+  assert.equal((await viewer.request.delete(url, { headers })).status(), 403);
+  assert.equal((await viewer.request.get(url)).status(), 200);
+
+  // A raw Storage client can declare a JPEG MIME type on other bytes.
+  assert.equal((await store("member", path, forged)).ok, true);
+  assert.equal((await viewer.request.get(url)).status(), 404);
+  assert.equal((await editor.request.delete(url, { headers })).status(), 204);
+  assert.deepEqual(await (await readVersions("viewer")).json(), []);
 });
