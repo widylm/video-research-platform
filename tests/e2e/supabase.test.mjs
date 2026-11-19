@@ -319,7 +319,9 @@ test("catalog cards show trusted covers, fallback text and one on-demand player"
   await button(page, "Найти видео").click();
   await page.getByText("Найдено: 3", { exact: true }).waitFor();
   const cards = page.locator("article");
-  const tik = cards.filter({ has: button(page, "Название из TikTok") });
+  const tik = cards.filter({ hasText: "Кадр из студии" });
+  await tik.scrollIntoViewIfNeeded();
+  await button(tik, "Название из TikTok").waitFor();
   await tik.getByText("Имя автора").waitFor();
   await tik.locator("img").evaluate((img) => img.decode());
   assert.equal(await tik.locator("img").getAttribute("src"), cover);
