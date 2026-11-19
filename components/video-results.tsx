@@ -1,13 +1,11 @@
 "use client";
 
-import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import {
-  CalendarDays, Eye, Film, Heart, LayoutGrid, List, Play, SearchX,
+  CalendarDays, Eye, Film, Heart, LayoutGrid, List, SearchX,
 } from "lucide-react";
-import { manualCoverUrl } from "@/lib/video-cover";
-import { officialEmbed, platformNames, sortOptions, videoLabel, type Sort, type Video, type VideoPreview } from "@/lib/videos";
-import { EmbeddedVideo } from "./embedded-video";
+import { officialEmbed, platformNames, sortOptions, videoLabel, type Sort, type Video } from "@/lib/videos";
+import { EmbeddedVideo, VideoPreviewButton } from "./embedded-video";
 
 export const formatNumber = new Intl.NumberFormat("ru-RU");
 const compact = new Intl.NumberFormat("ru-RU", { notation: "compact", maximumFractionDigits: 1 });
@@ -49,7 +47,7 @@ interface Props {
   emptyHint: string;
   onView: (view: Props["view"]) => void;
   onSort: (sort: Sort) => void;
-  onOpen: (video: Video, preview?: VideoPreview) => void;
+  onOpen: (video: Video) => void;
   onFavorite: (video: Video) => void;
 }
 
@@ -67,95 +65,44 @@ function FavoriteButton({ video, title, saved, busy, onFavorite }: {
   </button>;
 }
 
-function useVideoPreview<T extends HTMLElement>(video: Video) {
-  const { id, isMock, platform } = video;
-  const ref = useRef<T>(null);
-  const [preview, setPreview] = useState<VideoPreview | null>();
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element || isMock || platform !== "tiktok" || typeof IntersectionObserver === "undefined") return;
-    const controller = new AbortController();
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      observer.disconnect();
-      void fetch(`/api/videos/${id}/preview`, { signal: controller.signal }).then(async (response) => {
-        const result = response.ok ? await response.json() : null;
-        if (!controller.signal.aborted) setPreview(result);
-      }).catch(() => {
-        if (!controller.signal.aborted) setPreview(null);
-      });
-    }, { rootMargin: "160px" });
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-      controller.abort();
-    };
-  }, [id, isMock, platform]);
-
-  return { ref, preview: preview ?? undefined };
-}
-
 type EntryProps = Pick<Props, "busy" | "onOpen" | "onFavorite"> & { video: Video; saved: boolean };
 
 function VideoCard({ video, saved, busy, inline, onTogglePreview, onOpen, onFavorite }: EntryProps & {
   inline: boolean;
   onTogglePreview: () => void;
 }) {
-  const { ref, preview } = useVideoPreview<HTMLElement>(video);
-  const [loadedCover, setLoadedCover] = useState("");
-  const [failedCovers, setFailedCovers] = useState<readonly string[]>([]);
-  const { title, author } = videoLabel(video, preview);
-  const manual = video.coverRevision && manualCoverUrl(video.id, video.coverRevision);
-  const official = video.isMock ? video.cover : preview?.thumbnailUrl;
-  const cover = [manual, official].find((url) => url && !failedCovers.includes(url));
-  const showCover = Boolean(cover && (video.isMock || loadedCover === cover) && !inline);
+  const { title, author } = videoLabel(video);
   const embed = officialEmbed(video);
-  const open = () => onOpen(video, preview);
-  const badge = <PlatformBadge platform={video.platform} />;
-  const favorite = <FavoriteButton video={video} title={title} saved={saved} busy={busy} onFavorite={onFavorite} />;
 
-  return <article className="panel video-card" ref={ref}>
-    {cover && <div className={showCover ? "video-cover" : "video-cover-pending"} aria-hidden={!showCover}>
-      <Image key={cover} src={cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw"
-        unoptimized referrerPolicy="no-referrer" onLoad={() => setLoadedCover(cover)}
-        onError={() => setFailedCovers((current) => [...current, cover])} />
-      {showCover && <>
-        <button className="cover-trigger" onClick={open} aria-label={`Подробнее: ${title}`}>
-          <span className="play-mark" aria-hidden="true"><Play size={19} fill="currentColor" /></span>
-        </button>
-        {badge}{favorite}
-      </>}
-    </div>}
-    {!showCover && <div className="video-card-header">{badge}{favorite}</div>}
+  return <article className="panel video-card">
+    <div className="video-card-header">
+      <PlatformBadge platform={video.platform} />
+      <FavoriteButton video={video} title={title} saved={saved} busy={busy} onFavorite={onFavorite} />
+    </div>
 
     <div className="video-body">
-      <h3><button onClick={open}>{title}</button></h3>
+      <h3><button onClick={() => onOpen(video)}>{title}</button></h3>
       <p className="video-byline">
         <span className="video-author">{author || "Автор не указан"}</span>
         {video.publishedAt && <PublicationDate value={video.publishedAt} />}
       </p>
-      {!video.isMock && <p className="video-card-description">{video.description || "Описание не добавлено"}</p>}
-      {!video.isMock && video.hashtags.length > 0 && <div className="tags catalog-tags">
+      {video.description && <p className="video-card-description">{video.description}</p>}
+      {video.hashtags.length > 0 && <div className="tags catalog-tags">
         {video.hashtags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}
       </div>}
       <VideoMetrics video={video} />
-      {embed && <button className="button secondary catalog-preview-button" type="button"
-        onClick={onTogglePreview} aria-expanded={inline} aria-controls={`preview-${video.id}`}>
-        <Play size={16} aria-hidden="true" /> {inline ? "Скрыть предпросмотр" : "Предпросмотр"}
-      </button>}
+      {embed && <VideoPreviewButton id={`preview-${video.id}`} expanded={inline} onToggle={onTogglePreview} />}
     </div>
     {embed && <div id={`preview-${video.id}`} className={inline ? "catalog-player" : undefined} hidden={!inline}>
-      {inline && <EmbeddedVideo video={video} src={embed} hideFailedFrame />}
+      {inline && <EmbeddedVideo video={video} src={embed} />}
     </div>}
   </article>;
 }
 
 function VideoTableRow({ video, saved, busy, onOpen, onFavorite }: EntryProps) {
-  const { ref, preview } = useVideoPreview<HTMLTableRowElement>(video);
-  const { title, author } = videoLabel(video, preview);
-  return <tr ref={ref}>
-    <td><button className="table-video" onClick={() => onOpen(video, preview)}>{title}</button>
+  const { title, author } = videoLabel(video);
+  return <tr>
+    <td><button className="table-video" onClick={() => onOpen(video)}>{title}</button>
       {author && <small>{author}</small>}</td>
     <td><PlatformBadge platform={video.platform} /></td>
     <td><PublicationDate value={video.publishedAt} /></td>
@@ -191,7 +138,7 @@ export function VideoResults(props: Props) {
       {videos.map((video) => <VideoCard key={video.id}
         video={video} saved={favorites.includes(video.id)} busy={busy} inline={inlineId === video.id}
         onTogglePreview={() => setInlineId((id) => id === video.id ? undefined : video.id)}
-        onOpen={(entry, preview) => { setInlineId(undefined); onOpen(entry, preview); }} onFavorite={onFavorite}
+        onOpen={(entry) => { setInlineId(undefined); onOpen(entry); }} onFavorite={onFavorite}
       />)}
     </div> : <div className="panel table-scroll" tabIndex={0} role="region" aria-label="Таблица видео">
       <table>

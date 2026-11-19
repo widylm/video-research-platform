@@ -38,14 +38,18 @@ async function listen(server) {
   return server.address().port;
 }
 
-function gateway(ports) {
+function gateway(authPort, restPort, coverRequests) {
   return createServer((incoming, outgoing) => {
-    const match = /^\/(auth|rest|storage)\/v1(\/.*)?$/.exec(incoming.url);
+    if (/^\/(?:storage\/v1\b|rest\/v1\/rpc\/saved_video_cover_versions\b)/.test(incoming.url)) {
+      coverRequests.push(new URL(incoming.url, "http://localhost").pathname);
+      return outgoing.writeHead(503).end();
+    }
+    const match = /^\/(auth|rest)\/v1(\/.*)?$/.exec(incoming.url);
     if (!match) return outgoing.writeHead(404).end();
 
     const upstream = request({
       hostname: "127.0.0.1",
-      port: ports[match[1]],
+      port: match[1] === "auth" ? authPort : restPort,
       path: match[2] || "/",
       method: incoming.method,
       headers: incoming.headers,
@@ -78,8 +82,6 @@ export async function startSupabaseStack() {
     KADR_TEST_DB_PASSWORD: dbPassword,
     KADR_TEST_REST_PASSWORD: restPassword,
     KADR_TEST_JWT_SECRET: jwtSecret,
-    KADR_TEST_ANON_KEY: anonKey,
-    KADR_TEST_SERVICE_KEY: adminKey,
   };
   const compose = (args, input) => {
     const result = spawnSync("docker", ["compose", "--progress", "quiet", "-f", composeFile, "-p", project, ...args], {
@@ -92,6 +94,7 @@ export async function startSupabaseStack() {
   };
   const sql = (source) => compose(["exec", "-T", "db", "psql", "-U", "postgres", "-v", "ON_ERROR_STOP=1"], source);
   const port = (service, internalPort) => Number(compose(["port", service, String(internalPort)]).split(":").at(-1));
+  const coverRequests = [];
   let proxy;
   let worker;
 
@@ -126,15 +129,14 @@ export async function startSupabaseStack() {
       grant usage on schema auth to authenticated, anon;
     `);
 
-    compose(["up", "-d", "auth", "rest", "storage"]);
-    proxy = gateway({ auth: port("auth", 9999), rest: port("rest", 3000), storage: port("storage", 5000) });
+    compose(["up", "-d", "auth", "rest"]);
+    const authPort = port("auth", 9999);
+    const restPort = port("rest", 3000);
+    proxy = gateway(authPort, restPort, coverRequests);
     const supabaseUrl = `http://127.0.0.1:${await listen(proxy)}`;
     await Promise.all([
       waitFor(`${supabaseUrl}/auth/v1/health`, [200]),
       waitFor(`${supabaseUrl}/rest/v1/`, [200]),
-      waitFor(`${supabaseUrl}/storage/v1/status`, [200]).catch((error) => {
-        throw new Error(`${error.message}\n${redact(compose(["logs", "--tail", "15", "storage"]))}`);
-      }),
     ]);
 
     const migrations = await Promise.all([
@@ -144,8 +146,6 @@ export async function startSupabaseStack() {
     sql(["begin;", ...migrations, "commit;"].join("\n"));
     sql(await readFile(join(repo, "supabase/migrations/20261119000100_saved_public_videos.sql"), "utf8"));
     sql(await readFile(join(repo, "supabase/migrations/20261119000200_edit_video_metadata.sql"), "utf8"));
-
-    sql(await readFile(join(repo, "supabase/migrations/20261119141541_manual_video_covers.sql"), "utf8"));
 
     const profiles = {
       admin: "Администратор тестовой команды",
@@ -194,7 +194,7 @@ export async function startSupabaseStack() {
       throw new Error(`${error.message}\n${redact(workerLog)}`);
     });
 
-    async function requestAs(service, role, path, options = {}) {
+    async function restAs(role, path, options = {}) {
       let token = anonKey;
       if (role !== "anon") {
         const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
@@ -206,17 +206,13 @@ export async function startSupabaseStack() {
         if (!response.ok || typeof token !== "string") throw new Error(`No session for test role ${role}`);
       }
 
-      return fetch(`${supabaseUrl}/${service}/v1/${path}`, {
+      return fetch(`${supabaseUrl}/rest/v1/${path}`, {
         ...options,
-        headers: { "Content-Type": "application/json", ...options.headers, apikey: anonKey, Authorization: `Bearer ${token}` },
+        headers: { ...options.headers, apikey: anonKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
     }
 
-    return {
-      appUrl, users, stop,
-      restAs: (role, path, options) => requestAs("rest", role, path, options),
-      storageAs: (role, path, options) => requestAs("storage", role, path, options),
-    };
+    return { appUrl, users, restAs, coverRequests, stop };
   } catch (error) {
     try {
       await stop();

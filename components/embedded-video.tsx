@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Play } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { checkSavedVideo } from "@/app/actions";
 import { platformNames, type Video } from "@/lib/videos";
@@ -12,7 +12,18 @@ const messages = {
   available: "Платформа подтвердила встраивание. Если плеер не запускается, откройте публикацию на платформе.",
 };
 
-export function EmbeddedVideo({ video, src, hideFailedFrame = false }: { video: Video; src: string; hideFailedFrame?: boolean }) {
+export function VideoPreviewButton({ id, expanded, onToggle }: {
+  id: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return <button className="button secondary video-preview-button" type="button"
+    onClick={onToggle} aria-expanded={expanded} aria-controls={id}>
+    <Play size={16} aria-hidden="true" /> {expanded ? "Скрыть предпросмотр" : "Предпросмотр"}
+  </button>;
+}
+
+export function EmbeddedVideo({ video, src }: { video: Video; src: string }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [status, setStatus] = useState<keyof typeof messages>();
   const [checking, startTransition] = useTransition();
@@ -30,7 +41,7 @@ export function EmbeddedVideo({ video, src, hideFailedFrame = false }: { video: 
     return () => window.removeEventListener("message", receive);
   }, [video.platform]);
 
-  const showFallback = hideFailedFrame && (status === "missing" || status === "player");
+  const showFallback = status === "missing" || status === "player";
 
   return <>
     {!showFallback && <iframe ref={frame} className="official-embed" src={src} title={`Видео ${platformNames[video.platform]}`}

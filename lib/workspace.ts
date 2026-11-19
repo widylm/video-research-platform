@@ -13,8 +13,8 @@ export async function workspace() {
   return { mode: "team", supabase, profile } as const;
 }
 
-export const videoColumns = "id, platform, external_id, url, author, title, description, hashtags, published_at, views, likes, cover, is_mock";
-export type VideoRow = Omit<Video, "externalId" | "publishedAt" | "isMock" | "coverRevision"> & {
+export const videoColumns = "id, platform, external_id, url, author, title, description, hashtags, published_at, views, likes, is_mock";
+export type VideoRow = Omit<Video, "externalId" | "publishedAt" | "isMock"> & {
   external_id: string;
   published_at: string | null;
   is_mock: boolean;
@@ -28,20 +28,13 @@ type CollectionRow = {
   collection_videos: VideoLink[];
 };
 
-export function toVideo({ external_id, published_at, is_mock, ...video }: VideoRow): Video {
-  return { ...video, externalId: external_id, publishedAt: published_at, isMock: is_mock };
-}
-
-export async function attachCoverRevisions(supabase: Supabase, videos: Video[]): Promise<Video[]> {
-  const ids = videos.filter((video) => !video.isMock).map(({ id }) => id);
-  if (!ids.length) return videos;
-
-  const { data } = await supabase.rpc("saved_video_cover_versions", { video_ids: ids })
-    .select("id, revision").returns<{ id: string; revision: string }[]>();
-  if (!Array.isArray(data)) return videos;
-
-  const revisions = new Map<string, string>(data.map(({ id, revision }) => [id, revision]));
-  return videos.map((video) => ({ ...video, coverRevision: revisions.get(video.id) }));
+export function toVideo({
+  id, platform, external_id, url, author, title, description, hashtags, published_at, views, likes, is_mock,
+}: VideoRow): Video {
+  return {
+    id, platform, externalId: external_id, url, author, title, description, hashtags,
+    publishedAt: published_at, views, likes, isMock: is_mock,
+  };
 }
 
 export async function searchCatalog(supabase: Supabase, query: SearchQuery): Promise<Video[]> {
@@ -58,7 +51,7 @@ export async function searchCatalog(supabase: Supabase, query: SearchQuery): Pro
   }).select(videoColumns).returns<VideoRow[]>();
   if (error) throw error;
   if (!Array.isArray(data)) throw new Error("Unexpected catalog response.");
-  return attachCoverRevisions(supabase, data.map(toVideo));
+  return data.map(toVideo);
 }
 
 export type SavedVideoRow = { video: VideoRow; created: boolean };
@@ -93,11 +86,7 @@ export async function readLibrary(supabase: Supabase): Promise<Library> {
     videoIds: ids(row.collection_videos),
   }));
 
-  const entries = await attachCoverRevisions(supabase, Object.values(videos));
-  return {
-    favorites: favoriteIds, collections: collectionList,
-    videos: Object.fromEntries(entries.map((video) => [video.id, video])),
-  };
+  return { favorites: favoriteIds, collections: collectionList, videos };
 }
 
 export async function changeLibrary(

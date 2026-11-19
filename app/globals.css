@@ -17,7 +17,6 @@
   --danger-pale: #f8eeec;
   --danger-line: #a05b54;
   --on-accent: var(--paper);
-  --cover-overlay: #252725b3;
   --dialog-backdrop: #25272591;
   --dialog-shadow: 0 16px 44px #25272526;
   --font-body: "Manrope Variable", Manrope, system-ui, sans-serif;
@@ -442,37 +441,6 @@ input::placeholder {
   border-color: var(--control-line);
 }
 
-.video-cover {
-  @apply relative;
-  aspect-ratio: 1.63;
-  overflow: hidden;
-  background: var(--subtle);
-  border-radius: calc(var(--panel-radius) - 1px) calc(var(--panel-radius) - 1px) 0 0;
-}
-
-.cover-trigger {
-  @apply relative grid h-full w-full place-items-center overflow-hidden;
-  border-radius: inherit;
-}
-
-.cover-trigger:focus-visible { outline-offset: -3px; }
-
-.video-cover img, .dialog-cover img {
-  @apply object-cover;
-}
-
-.play-mark {
-  @apply relative grid place-items-center rounded-full;
-  width: 43px;
-  height: 43px;
-  padding-left: 2px;
-  border: 1px solid var(--on-accent);
-  color: var(--on-accent);
-  background: var(--cover-overlay);
-}
-
-.cover-trigger:hover .play-mark { background: var(--accent-hover); }
-
 .platform-badge {
   @apply inline-flex items-center gap-1.5 rounded-full;
   padding: 4px 8px;
@@ -483,25 +451,14 @@ input::placeholder {
   white-space: nowrap;
 }
 
-.video-cover > .platform-badge { @apply pointer-events-none absolute; top: 12px; left: 11px; }
-
-.video-cover .favorite-button {
-  @apply absolute;
-  top: 10px;
-  right: 10px;
-  border-radius: 999px;
-  background: var(--paper);
-  border: 1px solid var(--line);
-}
-
-.favorite-button.saved, .video-cover .favorite-button.saved {
+.favorite-button.saved {
   color: var(--accent-hover);
   background: var(--subtle);
 }
 
 .video-body {
   @apply flex flex-1 flex-col;
-  padding: 13px 14px 14px;
+  padding: 4px 14px 13px;
 }
 
 .video-body .video-metrics {
@@ -539,7 +496,7 @@ input::placeholder {
 
 .video-byline {
   @apply flex flex-wrap items-center gap-x-3 gap-y-0.5;
-  margin: 5px 0 11px;
+  margin: 4px 0 8px;
   color: var(--muted);
   font-size: 12px;
 }
@@ -626,7 +583,6 @@ body:has(dialog[open]) { overflow: hidden; }
   font: 700 25px/1.25 var(--font-body);
   letter-spacing: -.035em;
 }
-.dialog-cover { @apply relative overflow-hidden rounded-lg; aspect-ratio: 1.9; background: var(--subtle); }
 .official-embed { @apply block w-full rounded-lg; height: min(470px, 55dvh); border: 1px solid var(--line); }
 .video-demo { margin: 8px 0; color: var(--muted); font-size: 12px; }
 .dialog-body .video-metrics { margin-top: 9px; }
@@ -794,31 +750,19 @@ body:has(dialog[open]) { overflow: hidden; }
   padding: 9px 12px 0;
 }
 .video-card-description {
-  @apply line-clamp-3;
-  margin-bottom: 13px;
+  @apply line-clamp-2;
+  margin-bottom: 8px;
   color: var(--muted);
   font-size: 13px;
   overflow-wrap: anywhere;
 }
-.catalog-preview-button { align-self: flex-start; margin-top: 10px; }
+.video-preview-button { align-self: flex-start; margin-top: 10px; }
 .catalog-player { padding: 0 14px 14px; }
 .catalog-player .official-embed { height: min(430px, 60dvh); }
 .catalog-player .player-links { margin-top: 5px; }
 .video-grid:has(.catalog-player) { align-items: start; }
 .edit-video-button { margin: 8px 0 10px; }
-.video-cover-form { margin: 2px 0 14px; }
-.video-cover-actions { @apply flex flex-wrap gap-2; }
 
-.video-card { position: relative; }
-.video-cover-pending {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-.catalog-tags { margin: -6px 0 11px; }
+.dialog-player { margin-top: 10px; }
+.catalog-tags { margin-bottom: 9px; }
 .catalog-tags span { max-width: 100%; overflow-wrap: anywhere; }

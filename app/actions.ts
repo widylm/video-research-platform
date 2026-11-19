@@ -7,7 +7,7 @@ import { searchVideos } from "@/lib/providers";
 import { currentProfile, serverSupabase } from "@/lib/supabase";
 import { videoDetailsSchema, videoEntrySchema } from "@/lib/video-entry";
 import { platformVideoTitle, searchSchema, type Video } from "@/lib/videos";
-import { attachCoverRevisions, changeLibrary, readLibrary, searchCatalog, toVideo, videoColumns, workspace, type SavedVideoRow, type VideoRow } from "@/lib/workspace";
+import { changeLibrary, readLibrary, searchCatalog, toVideo, videoColumns, workspace, type SavedVideoRow, type VideoRow } from "@/lib/workspace";
 
 type ActionResult<T> = { data: T } | { error: string };
 const authError = { error: "Войдите в аккаунт команды, чтобы продолжить." };
@@ -70,8 +70,7 @@ export async function savePublicVideo(input: unknown): Promise<ActionResult<{ vi
         : "У вас нет прав на добавление видео." };
     }
     if (error) throw error;
-    const [video] = await attachCoverRevisions(session.supabase, [toVideo(data.video)]);
-    return { data: { video, created: data.created } };
+    return { data: { video: toVideo(data.video), created: data.created } };
   } catch {
     return { error: "Не удалось сохранить видео. Попробуйте ещё раз." };
   }
@@ -98,8 +97,7 @@ export async function updateVideoDetails(input: unknown): Promise<ActionResult<V
     const { data, error } = await update.select(videoColumns).maybeSingle<VideoRow>();
     if (error) throw error;
     if (!data) return { error: "Карточка недоступна для редактирования." };
-    const [video] = await attachCoverRevisions(session.supabase, [toVideo(data)]);
-    return { data: video };
+    return { data: toVideo(data) };
   } catch {
     return { error: "Не удалось обновить карточку. Попробуйте ещё раз." };
   }
