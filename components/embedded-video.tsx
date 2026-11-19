@@ -12,7 +12,7 @@ const messages = {
   available: "Платформа подтвердила встраивание. Если плеер не запускается, откройте публикацию на платформе.",
 };
 
-export function EmbeddedVideo({ video, src }: { video: Video; src: string }) {
+export function EmbeddedVideo({ video, src, hideFailedFrame = false }: { video: Video; src: string; hideFailedFrame?: boolean }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [status, setStatus] = useState<keyof typeof messages>();
   const [checking, startTransition] = useTransition();
@@ -30,10 +30,12 @@ export function EmbeddedVideo({ video, src }: { video: Video; src: string }) {
     return () => window.removeEventListener("message", receive);
   }, [video.platform]);
 
+  const showFallback = hideFailedFrame && (status === "missing" || status === "player");
+
   return <>
-    <iframe ref={frame} className="official-embed" src={src} title={`Видео ${platformNames[video.platform]}`}
+    {!showFallback && <iframe ref={frame} className="official-embed" src={src} title={`Видео ${platformNames[video.platform]}`}
       allow="encrypted-media; fullscreen; picture-in-picture" allowFullScreen
-      referrerPolicy="strict-origin-when-cross-origin" onError={() => setStatus("player")} />
+      referrerPolicy="strict-origin-when-cross-origin" onError={() => setStatus("player")} />}
     <div className="player-links">
       <a href={video.url ?? src} target="_blank" rel="noreferrer" className="external-link">
         Открыть в {platformNames[video.platform]} <ExternalLink size={15} />
@@ -48,7 +50,7 @@ export function EmbeddedVideo({ video, src }: { video: Video; src: string }) {
       })}>{checking ? "Проверяем…" : "Проверить доступность"}</button>
     </div>
     <p className="field-hint" role="status">
-      {status ? messages[status] : "Если видео не воспроизводится, проверьте доступность или откройте оригинал."}
+      {showFallback ? "Ролик можно открыть на платформе." : status ? messages[status] : "Если видео не воспроизводится, проверьте доступность или откройте оригинал."}
     </p>
   </>;
 }

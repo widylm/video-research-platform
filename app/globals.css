@@ -805,3 +805,34 @@ body:has(dialog[open]) { overflow: hidden; }
 .catalog-player .player-links { margin-top: 5px; }
 .video-grid:has(.catalog-player) { align-items: start; }
 .edit-video-button { margin: 8px 0 10px; }
+
+.video-card { position: relative; }
+.catalog-frame-anchor {
+  position: absolute;
+  top: 22px;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.catalog-frame {
+  @apply absolute inset-0 h-full w-full overflow-hidden;
+  border: 0;
+  border-radius: inherit;
+  opacity: 0;
+  pointer-events: none;
+}
+.catalog-frame[data-ready="true"] { opacity: 1; }
+.catalog-frame[data-ready="true"] + .cover-trigger .play-mark {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  width: 34px;
+  height: 34px;
+}
+.catalog-tags { margin: -6px 0 11px; }
+.catalog-tags span { max-width: 100%; overflow-wrap: anywhere; }
+.display-options:has(.catalog-frames-toggle) { flex-wrap: wrap; }
+.catalog-frames-toggle { min-height: 36px; padding: 4px 9px; font-size: 12px; }
+@media (max-width: 740px) {
+  .catalog-frames-toggle { min-height: 44px; }
+}
