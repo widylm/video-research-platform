@@ -14,18 +14,23 @@ export function PlatformBadge({ platform }: { platform: Video["platform"] }) {
   return <span className="platform-badge"><span aria-hidden="true" />{platformNames[platform]}</span>;
 }
 
-function PublicationDate({ value }: { value: string }) {
-  return <time dateTime={value}>{dateFormat.format(new Date(value))}</time>;
+function PublicationDate({ value }: { value: string | null }) {
+  return value ? <time dateTime={value}>{dateFormat.format(new Date(value))}</time>
+    : <span className="unknown-value">Нет данных</span>;
+}
+
+function count(value: number | null, formatter = formatNumber) {
+  return value === null ? "Нет данных" : formatter.format(value);
 }
 
 export function VideoMetrics({ video, full = false }: { video: Video; full?: boolean }) {
   const number = full ? formatNumber : compact;
   return <div className="video-metrics">
-    <span title="Просмотры" aria-label={`Просмотры: ${formatNumber.format(video.views)}`}>
-      <Eye size={16} aria-hidden="true" /> {number.format(video.views)}
+    <span title="Просмотры" aria-label={`Просмотры: ${count(video.views)}`}>
+      <Eye size={16} aria-hidden="true" /> {count(video.views, number)}
     </span>
-    <span title="Лайки" aria-label={`Лайки: ${formatNumber.format(video.likes)}`}>
-      <Heart size={15} aria-hidden="true" /> {number.format(video.likes)}
+    <span title="Лайки" aria-label={`Лайки: ${count(video.likes)}`}>
+      <Heart size={15} aria-hidden="true" /> {count(video.likes, number)}
     </span>
     {full && <span><CalendarDays size={16} aria-hidden="true" /><PublicationDate value={video.publishedAt} /></span>}
   </div>;
@@ -83,7 +88,8 @@ export function VideoResults(props: Props) {
       {videos.map((video) => <article className="panel video-card" key={video.id}>
         <div className="video-cover">
           <button className="cover-trigger" onClick={() => onOpen(video)} aria-label={`Подробнее: ${video.title}`}>
-            <Image src={video.cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw" />
+            {video.cover ? <Image src={video.cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw" />
+              : <span className="saved-cover" aria-hidden="true"><Film size={68} strokeWidth={1} /></span>}
             <span className="play-mark" aria-hidden="true"><Play size={19} fill="currentColor" /></span>
           </button>
           <PlatformBadge platform={video.platform} />
@@ -92,7 +98,7 @@ export function VideoResults(props: Props) {
         <div className="video-body">
           <h3><button onClick={() => onOpen(video)}>{video.title}</button></h3>
           <p className="video-byline">
-            <span className="video-author">@{video.author}</span>
+            {video.author && <span className="video-author">@{video.author}</span>}
             <PublicationDate value={video.publishedAt} />
           </p>
           <VideoMetrics video={video} />
@@ -105,10 +111,10 @@ export function VideoResults(props: Props) {
         </tr></thead>
         <tbody>{videos.map((video) => <tr key={video.id}>
           <td><button className="table-video" onClick={() => onOpen(video)}>{video.title}</button>
-            <small>@{video.author}</small></td>
+            {video.author && <small>@{video.author}</small>}</td>
           <td><PlatformBadge platform={video.platform} /></td>
           <td><PublicationDate value={video.publishedAt} /></td>
-          <td>{formatNumber.format(video.views)}</td><td>{formatNumber.format(video.likes)}</td>
+          <td>{count(video.views)}</td><td>{count(video.likes)}</td>
           <td><FavoriteButton video={video} saved={favorites.includes(video.id)} busy={busy} onFavorite={onFavorite} /></td>
         </tr>)}</tbody>
       </table>

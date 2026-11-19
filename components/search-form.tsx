@@ -6,13 +6,14 @@ import { defaultSearch, platformNames, type SearchQuery } from "@/lib/videos";
 interface SearchFormProps {
   query: SearchQuery;
   busy: boolean;
+  demo: boolean;
   onChange: (query: SearchQuery) => void;
   onSearch: (query: SearchQuery) => void;
 }
 
 const sources = { all: "Все платформы", ...platformNames } as const;
 
-export function SearchForm({ query, busy, onChange, onSearch }: SearchFormProps) {
+export function SearchForm({ query, demo, busy, onChange, onSearch }: SearchFormProps) {
   function field<Key extends keyof SearchQuery>(key: Key, value: SearchQuery[Key]) {
     onChange({ ...query, [key]: value });
   }
@@ -23,8 +24,8 @@ export function SearchForm({ query, busy, onChange, onSearch }: SearchFormProps)
     onSearch({
       ...query,
       limit: Number(values.get("limit") || defaultSearch.limit),
-      minViews: Number(values.get("minViews") || 0),
-      minLikes: Number(values.get("minLikes") || 0),
+      minViews: values.get("minViews") ? Number(values.get("minViews")) : null,
+      minLikes: values.get("minLikes") ? Number(values.get("minLikes")) : null,
     });
   }}>
     <div className="search-panel-inner">
@@ -67,13 +68,13 @@ export function SearchForm({ query, busy, onChange, onSearch }: SearchFormProps)
         <label>Макс. видео<input key={query.limit} name="limit" type="number"
           min={1} max={100} step={1} defaultValue={query.limit} /></label>
         <label>Мин. просмотров<input key={query.minViews} name="minViews" type="number"
-          min={0} max={Number.MAX_SAFE_INTEGER} step={1} defaultValue={query.minViews} /></label>
+          min={0} max={Number.MAX_SAFE_INTEGER} step={1} defaultValue={query.minViews ?? undefined} /></label>
         <label>Мин. лайков<input key={query.minLikes} name="minLikes" type="number"
-          min={0} max={Number.MAX_SAFE_INTEGER} step={1} defaultValue={query.minLikes} /></label>
+          min={0} max={Number.MAX_SAFE_INTEGER} step={1} defaultValue={query.minLikes ?? undefined} /></label>
       </div>
     </div>
     <div className="search-footer">
-      <span>Источник данных — демонстрационный каталог</span>
+      <span>{demo ? "Источник данных — демонстрационный каталог" : "Источник данных — каталог команды"}</span>
       <div className="form-actions">
         <button type="button" className="button quiet" disabled={busy} onClick={(event) => {
           event.currentTarget.form?.reset();
