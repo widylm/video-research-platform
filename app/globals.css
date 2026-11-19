@@ -727,7 +727,7 @@ body:has(dialog[open]) { overflow: hidden; }
 .unknown-value { color: var(--muted); }
 
 .add-video-form { @apply grid gap-3; margin-top: 14px; }
-.add-video-form textarea {
+.add-video-form textarea, .pilot-note textarea {
   @apply block w-full rounded-lg;
   margin-top: 5px;
   padding: 8px 11px;
@@ -766,3 +766,29 @@ body:has(dialog[open]) { overflow: hidden; }
 .dialog-player { margin-top: 10px; }
 .catalog-tags { margin-bottom: 9px; }
 .catalog-tags span { max-width: 100%; overflow-wrap: anywhere; }
+
+.pilot-form { padding: 18px; }
+.pilot-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(105px, .7fr);
+  gap: 12px;
+}
+.pilot-fields label, .pilot-note label { display: grid; gap: 5px; font-size: 13px; font-weight: 700; }
+.pilot-actions, .pilot-pagination, .pilot-result-summary { @apply flex flex-wrap items-center justify-between gap-3; }
+.pilot-actions { margin-top: 14px; }
+.pilot-actions > span, .pilot-result-summary > span + span { color: var(--muted); font-size: 13px; }
+.pilot-pagination { margin: 10px 0; }
+.pilot-card { @apply grid content-start gap-2; padding: 14px; overflow-wrap: anywhere; }
+.pilot-card h3 { font-size: 16px; font-weight: 750; }
+.pilot-card > .platform-badge { justify-self: start; }
+.pilot-card > .video-author { margin: 0; }
+.pilot-card summary { cursor: pointer; font-size: 13px; font-weight: 700; }
+.pilot-metadata { @apply grid gap-1; font-size: 12px; }
+.pilot-metadata > div { @apply grid grid-cols-2 gap-2; }
+.pilot-metadata dt { color: var(--muted); }
+.pilot-note form { @apply grid gap-2; margin-top: 7px; }
+.pilot-note .button { justify-self: start; }
+@media (max-width: 680px) {
+  .pilot-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .pilot-fields > label:first-child { grid-column: 1 / -1; }
+}

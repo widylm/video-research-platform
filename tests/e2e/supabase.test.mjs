@@ -507,3 +507,60 @@ test("TikTok errors stay out of grid cards and the original link remains availab
   assert.equal(await card.locator("iframe").count(), 0);
   await card.getByRole("link", { name: "Открыть в TikTok" }).waitFor();
 });
+
+test("bulk search paginates 1000 mock results and keeps notes separate in the browser", { timeout: 45_000 }, async (t) => {
+  const page = await signedInAs(t, "member");
+  const externalRequests = [];
+  const pilotPosts = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).origin !== stack.appUrl) externalRequests.push(request.url());
+    if (request.method() === "POST") pilotPosts.push(request.url());
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await button(page, "Массовый поиск").click();
+  await page.getByLabel("Ключевые слова").fill("кофе");
+  await page.getByLabel("Макс. видео").fill("1000");
+  await button(page, "Запустить тестовый поиск").click();
+  await page.getByRole("status").filter({ hasText: /^Найдено: 1000$/ }).waitFor();
+  await page.getByText("Страница 1 из 50").waitFor();
+  await page.getByText(/Обработано страниц: 20/).waitFor();
+  const results = page.getByRole("region", { name: "Результаты пилота" });
+  const first = results.locator("article").first();
+  await first.getByRole("heading", { name: "Демо №1" }).waitFor();
+  assert.equal(await results.locator("article").count(), 20);
+  assert.equal(await results.locator("iframe, img").count(), 0);
+  assert.ok(await results.getByText("Нет данных", { exact: true }).count() > 0);
+
+  await first.getByText("Источник и ссылка", { exact: true }).click();
+  await first.getByText("mock:tiktok", { exact: true }).waitFor();
+  await first.getByText("Заметка", { exact: true }).click();
+  await first.getByLabel("Личная заметка").fill("Это отдельная тестовая заметка");
+  await button(first, "Сохранить заметку").click();
+  await first.getByText("Заметка сохранена.").waitFor();
+  await button(results, "Далее").click();
+  await page.getByText("Страница 2 из 50").waitFor();
+  await first.getByRole("heading", { name: "Название недоступно" }).waitFor();
+  await button(results, "Назад").click();
+  await first.getByRole("heading", { name: "Демо №1" }).waitFor();
+  await first.getByText("Заметка", { exact: true }).click();
+  assert.equal(await first.getByLabel("Личная заметка").inputValue(), "Это отдельная тестовая заметка");
+
+  const snapshot = await page.evaluate(() => {
+    const resultKey = Object.keys(sessionStorage).find((key) => /^kadr\.bulk-pilot.*\.results$/.test(key));
+    const noteKey = Object.keys(localStorage).find((key) => /^kadr\.bulk-pilot.*\.note\./.test(key));
+    const result = JSON.parse(sessionStorage.getItem(resultKey)).result;
+    return { note: localStorage.getItem(noteKey), containsNote: JSON.stringify(result).includes("отдельная тестовая заметка"),
+      title: result.videos[0].originalTitle, chargedMicros: result.chargedMicros, budgetMicros: result.budgetMicros };
+  });
+  assert.deepEqual(snapshot, {
+    note: "Это отдельная тестовая заметка", containsNote: false, title: "Демо №1", chargedMicros: 0, budgetMicros: 0,
+  });
+  await page.reload();
+  await button(page, "Массовый поиск").click();
+  await page.getByRole("status").filter({ hasText: /^Найдено: 1000$/ }).waitFor();
+  await first.getByText("Заметка", { exact: true }).click();
+  assert.equal(await first.getByLabel("Личная заметка").inputValue(), "Это отдельная тестовая заметка");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+  assert.deepEqual(externalRequests, []);
+  assert.deepEqual(pilotPosts, []);
+});
