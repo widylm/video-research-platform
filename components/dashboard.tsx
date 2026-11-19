@@ -8,7 +8,7 @@ import { z } from "zod";
 import { refreshLibrary, runSearch, signOut, updateLibrary } from "@/app/actions";
 import { libraryCommand, type Library, type LibraryCommand } from "@/lib/library";
 import type { Profile } from "@/lib/supabase";
-import { defaultSearch, sortVideos, type SearchQuery, type Sort, type Video, type VideoPreview } from "@/lib/videos";
+import { defaultSearch, sortVideos, type SearchQuery, type Sort, type Video } from "@/lib/videos";
 import { AddVideoDialog } from "./add-video-dialog";
 import { Brand } from "./brand";
 import { Collections } from "./collections";
@@ -70,7 +70,6 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
   const [view, setView] = useState<"grid" | "table">("grid");
   const [librarySort, setLibrarySort] = useState<Sort>("recent");
   const [selected, setSelected] = useState<Video | null>(null);
-  const [selectedPreview, setSelectedPreview] = useState<VideoPreview>();
   const [adding, setAdding] = useState(false);
   const [saveNotice, setSaveNotice] = useState("");
   const [collectionId, setCollectionId] = useState<string>();
@@ -265,10 +264,9 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
               if (section === "search") search({ ...applied, sort });
               else setLibrarySort(sort);
             }}
-            onOpen={(video, preview) => {
+            onOpen={(video) => {
               setError("");
               setSaveNotice("");
-              setSelectedPreview(preview);
               setSelected(video);
             }}
             onFavorite={(video) => save({ kind: "favorite", videoId: video.id, saved: !library.favorites.includes(video.id) })}
@@ -282,26 +280,25 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
       onSaved={(video, created) => {
         setAdding(false);
         setSaveNotice(created ? "Видео сохранено в каталоге." : "Это видео уже в каталоге. Открыта существующая карточка.");
-        setSelectedPreview(undefined);
         setSelected(video);
         search(applied, false);
         reload();
       }}
     />}
     {selected && <VideoDialog key={selected.id}
-      video={selected} preview={selectedPreview} canEditDetails={Boolean(profile && canEdit && !selected.isMock)}
+      video={selected} canEditDetails={Boolean(profile && canEdit && !selected.isMock)}
       collections={library.collections} canEdit={canEdit} busy={sessionBusy} error={error} notice={saveNotice}
       onClose={() => {
         setSelected(null);
         setError("");
       }}
-      onUpdated={(video, change) => {
+      onUpdated={(video) => {
         setSelected(video);
         setVideos((list) => list.map((entry) => entry.id === video.id ? video : entry));
         setLibrary((current) => current.videos[video.id]
           ? { ...current, videos: { ...current.videos, [video.id]: video } } : current);
-        setSaveNotice(change === "details" ? "Карточка обновлена." : "");
-        if (change === "details" && section === "search") search(applied, false);
+        setSaveNotice("Карточка обновлена.");
+        if (section === "search") search(applied, false);
       }}
       onToggle={(collection, saved) => save({
         kind: "item", collectionId: collection.id, videoId: selected.id, saved,

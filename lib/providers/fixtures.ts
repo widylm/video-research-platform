@@ -32,7 +32,6 @@ export const mockVideos: Video[] = fixtures.map(
     publishedAt: `${date}T12:00:00.000Z`,
     views,
     likes,
-    cover: `/covers/${slug}.webp`,
     isMock: true,
   }),
 );
