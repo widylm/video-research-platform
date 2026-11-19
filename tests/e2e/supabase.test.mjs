@@ -28,10 +28,21 @@ function button(page, name) {
   return page.getByRole("button", { name, exact: typeof name === "string" });
 }
 
+function tikTokPlayer(route, errorCode) {
+  const message = errorCode ? { type: "onPlayerError", value: { errorCode } } : { type: "onPlayerReady" };
+  return route.fulfill({
+    contentType: "text/html",
+    body: `<!doctype html><title>Плеер TikTok</title><script>
+      parent.postMessage(${JSON.stringify({ ...message, "x-tiktok-player": true })}, "*");
+    </script>${errorCode ? "<p>Server error</p>" : ""}`,
+  });
+}
+
 async function loginPage(t) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   t.after(() => page.close());
   await page.route("**/api/videos/*/preview", (route) => route.fulfill({ json: null }));
+  await page.route("https://www.tiktok.com/player/v1/*", (route) => tikTokPlayer(route));
   await page.goto(stack.appUrl);
   await page.waitForURL("**/login");
   await page.getByRole("heading", { name: loginTitle }).waitFor();
@@ -286,10 +297,10 @@ async function testPublicVideoAccess() {
   assert.deepEqual(await outsider.json(), []);
 }
 
-test("catalog cards show trusted covers, fallback text and one on-demand player", { timeout: 55_000 }, async (t) => {
+test("catalog cards prefer a cover, show a paused TikTok frame and open Instagram on demand", { timeout: 55_000 }, async (t) => {
   const video = await addCatalogFixture("tiktok", "1234567890123456789");
   const broken = await addCatalogFixture("tiktok", "1234567890123456788");
-  const instagram = await addCatalogFixture("instagram", "KadrPreview01");
+  const instagram = await addCatalogFixture("instagram", "KadrPreview01", { p_hashtags: ["сценография"] });
   const denied = await fetch(`${stack.appUrl}/api/videos/${video.id}/preview`);
   assert.equal(denied.status, 401);
   assert.match(denied.headers.get("cache-control"), /private, no-store/);
@@ -309,7 +320,6 @@ test("catalog cards show trusted covers, fallback text and one on-demand player"
   }));
   const brokenRequest = page.waitForRequest((request) => request.url() === missingCover);
   await page.route(missingCover, (route) => route.abort());
-  await page.route("https://www.tiktok.com/player/v1/*", (route) => route.fulfill({ body: "TikTok iframe" }));
   await page.route("https://www.instagram.com/p/KadrPreview01/embed/", (route) => route.fulfill({ body: "Instagram iframe" }));
 
   await page.setViewportSize({ width: 390, height: 844 });
@@ -334,13 +344,23 @@ test("catalog cards show trusted covers, fallback text and one on-demand player"
   await fallback.locator("img").waitFor({ state: "hidden" });
   assert.equal(await fallback.getByRole("heading").textContent(), "Заметки о съёмке");
 
-  assert.equal(await page.locator("iframe").count(), 0);
+  const staticFrame = fallback.locator('iframe.catalog-frame[data-ready="true"]');
+  await staticFrame.waitFor();
+  assert.equal(await staticFrame.getAttribute("allow"), "autoplay 'none'");
+  const params = new URL(await staticFrame.getAttribute("src")).searchParams;
+  assert.equal(params.get("autoplay"), "0");
+  assert.equal(params.get("controls"), "0");
+  assert.equal(await tik.locator("iframe").count(), 0);
+
   await button(tik, "Предпросмотр").click();
+  await staticFrame.waitFor({ state: "detached" });
   assert.match(await tik.locator("iframe").getAttribute("src"), /tiktok\.com\/player\/v1\//);
   const ig = cards.filter({ has: button(page, "Публикация Instagram") });
   await ig.getByText("Автор не указан").waitFor();
   await ig.getByText("Описание не добавлено").waitFor();
+  await ig.getByText("#сценография").waitFor();
   assert.equal(await ig.getByText(instagram.external_id).count(), 0);
+  assert.equal(await ig.locator("iframe").count(), 0);
   await button(ig, "Предпросмотр").click();
   await tik.locator("iframe").waitFor({ state: "detached" });
   assert.equal(await ig.locator("iframe").getAttribute("src"), "https://www.instagram.com/p/KadrPreview01/embed/");
@@ -406,7 +426,7 @@ test("authorized editors can rename a saved video without changing its identity 
   }]);
 });
 
-async function addCatalogFixture(platform, externalId) {
+async function addCatalogFixture(platform, externalId, overrides = {}) {
   const tiktok = platform === "tiktok";
   const payload = {
     p_platform: platform,
@@ -420,6 +440,7 @@ async function addCatalogFixture(platform, externalId) {
     p_views: null,
     p_likes: null,
     p_collection_id: null,
+    ...overrides,
   };
   const response = await stack.restAs("admin", "rpc/save_public_video", {
     method: "POST", body: JSON.stringify(payload),
@@ -428,3 +449,82 @@ async function addCatalogFixture(platform, externalId) {
   const [{ video }] = await response.json();
   return video;
 }
+
+test("automatic TikTok frames are limited to visible cards and honor the traffic preference", { timeout: 65_000 }, async (t) => {
+  await Promise.all(Array.from({ length: 8 }, (_, index) => addCatalogFixture("tiktok", `192345678901234567${index}`, {
+    p_title: `Серия кадров ${index}`,
+    p_published_at: `2026-11-2${8 - index}`,
+  })));
+  const page = await signedInAs(t, "viewer");
+  await page.setViewportSize({ width: 1500, height: 960 });
+  await page.getByLabel("Ключевые слова").fill("Серия кадров");
+  await button(page, "Найти видео").click();
+  await page.getByText("Найдено: 8", { exact: true }).waitFor();
+  const frames = page.locator("iframe.catalog-frame");
+  const cards = page.locator("article");
+  const first = cards.filter({ has: button(page, "Серия кадров 0") });
+  await first.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelectorAll('iframe.catalog-frame[data-ready="true"]').length === 2);
+  assert.equal(await frames.count(), 2);
+  const laterDesktop = cards.filter({ has: button(page, "Серия кадров 3") });
+  await laterDesktop.hover();
+  await laterDesktop.locator('iframe.catalog-frame[data-ready="true"]').waitFor();
+  assert.equal(await frames.count(), 2);
+
+  await page.setViewportSize({ width: 390, height: 540 });
+  const later = cards.filter({ has: button(page, "Серия кадров 4") });
+  await later.evaluate((card) => card.scrollIntoView({ block: "start" }));
+  await page.waitForFunction(() => document.querySelectorAll("iframe.catalog-frame").length === 1);
+  await later.locator('iframe.catalog-frame[data-ready="true"]').waitFor();
+  assert.equal(await first.locator("iframe").count(), 0);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
+
+  const toggle = button(page, "Кадры в сетке");
+  await toggle.click();
+  await frames.first().waitFor({ state: "detached" });
+  assert.equal(await toggle.getAttribute("aria-pressed"), "false");
+  await toggle.click();
+  await first.scrollIntoViewIfNeeded();
+  await first.locator('iframe.catalog-frame[data-ready="true"]').waitFor();
+
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "connection", {
+      value: Object.assign(new EventTarget(), { saveData: true }),
+    });
+  });
+  await page.reload();
+  await toggle.waitFor();
+  assert.equal(await toggle.getAttribute("aria-pressed"), "false");
+  assert.equal(await toggle.isDisabled(), true);
+  assert.equal(await frames.count(), 0);
+});
+
+test("TikTok errors stay out of grid cards and the original link remains available", { timeout: 35_000 }, async (t) => {
+  const externalId = "1299999999999999999";
+  await addCatalogFixture("tiktok", externalId, {
+    p_title: "Идея для монтажа",
+    p_description: "Ритм и смена ракурсов",
+    p_hashtags: ["монтаж"],
+  });
+  const page = await loginPage(t);
+  const passiveRequest = page.waitForRequest((request) => (
+    request.url().includes(`/player/v1/${externalId}?`) && request.url().includes("autoplay=0")
+  ));
+  await page.route(`https://www.tiktok.com/player/v1/${externalId}*`, (route) => tikTokPlayer(route, 2001));
+  await submitLogin(page, "viewer");
+  await page.waitForURL(stack.appUrl + "/");
+  await page.getByLabel("Ключевые слова").fill("Идея для монтажа");
+  await button(page, "Найти видео").click();
+  await page.getByText("Найдено: 1", { exact: true }).waitFor();
+  const card = page.locator("article").filter({ has: button(page, "Идея для монтажа") });
+  await card.scrollIntoViewIfNeeded();
+  await passiveRequest;
+  await card.locator("iframe").waitFor({ state: "detached" });
+  await card.getByText("Ритм и смена ракурсов").waitFor();
+  await card.getByText("#монтаж").waitFor();
+
+  await button(card, "Предпросмотр").click();
+  await card.getByText("Ролик можно открыть на платформе.").waitFor();
+  assert.equal(await card.locator("iframe").count(), 0);
+  await card.getByRole("link", { name: "Открыть в TikTok" }).waitFor();
+});

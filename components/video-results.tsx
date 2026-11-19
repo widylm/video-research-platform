@@ -1,11 +1,12 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  CalendarDays, Eye, Film, Heart, LayoutGrid, List, Play, SearchX,
+  CalendarDays, Eye, Film, Heart, Image as ImageIcon, LayoutGrid, List, Play, SearchX,
 } from "lucide-react";
-import { officialEmbed, platformNames, sortOptions, videoLabel, type Sort, type Video, type VideoPreview } from "@/lib/videos";
+import { officialCatalogFrame, officialEmbed, platformNames, sortOptions, videoLabel, type Sort, type Video, type VideoPreview } from "@/lib/videos";
+import { CatalogVideoFrame, useCatalogFrameLimit } from "./catalog-video-frame";
 import { EmbeddedVideo } from "./embedded-video";
 
 export const formatNumber = new Intl.NumberFormat("ru-RU");
@@ -45,6 +46,9 @@ interface Props {
   view: "grid" | "table";
   sort: Sort;
   busy: boolean;
+  showCatalogFrames: boolean;
+  pauseCatalogFrames: boolean;
+  onCatalogFramesChange: (enabled: boolean) => void;
   emptyHint: string;
   onView: (view: Props["view"]) => void;
   onSort: (sort: Sort) => void;
@@ -69,19 +73,20 @@ function FavoriteButton({ video, title, saved, busy, onFavorite }: {
 function useVideoPreview<T extends HTMLElement>(video: Video) {
   const { id, isMock, platform } = video;
   const ref = useRef<T>(null);
-  const [preview, setPreview] = useState<VideoPreview>();
+  const [preview, setPreview] = useState<VideoPreview | null>();
 
   useEffect(() => {
     const element = ref.current;
-    if (!element || isMock || platform !== "tiktok") return;
+    if (!element || isMock || platform !== "tiktok" || typeof IntersectionObserver === "undefined") return;
     const controller = new AbortController();
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
       observer.disconnect();
       void fetch(`/api/videos/${id}/preview`, { signal: controller.signal }).then(async (response) => {
-        if (response.ok) setPreview((await response.json()) ?? undefined);
+        const result = response.ok ? await response.json() : null;
+        if (!controller.signal.aborted) setPreview(result);
       }).catch(() => {
-        // The card can still show its saved details when enrichment is unavailable.
+        if (!controller.signal.aborted) setPreview(null);
       });
     }, { rootMargin: "160px" });
     observer.observe(element);
@@ -91,30 +96,61 @@ function useVideoPreview<T extends HTMLElement>(video: Video) {
     };
   }, [id, isMock, platform]);
 
-  return { ref, preview };
+  return { ref, preview: preview ?? undefined, waitingForCover: !isMock && platform === "tiktok" && preview === undefined };
 }
 
 type EntryProps = Pick<Props, "busy" | "onOpen" | "onFavorite"> & { video: Video; saved: boolean };
 
-function VideoCard({ video, saved, busy, inline, onTogglePreview, onOpen, onFavorite }: EntryProps & {
+function VideoCard({ video, saved, busy, inline, automatic, automaticEnabled, onVisibility, onFrameFocus, onTogglePreview, onOpen, onFavorite }: EntryProps & {
   inline: boolean;
+  automatic: boolean;
+  automaticEnabled: boolean;
+  onVisibility: (id: string, visible: boolean) => void;
+  onFrameFocus: (id: string) => void;
   onTogglePreview: () => void;
 }) {
-  const { ref, preview } = useVideoPreview<HTMLElement>(video);
+  const { ref, preview, waitingForCover } = useVideoPreview<HTMLElement>(video);
+  const anchor = useRef<HTMLSpanElement>(null);
   const [failedCover, setFailedCover] = useState("");
+  const [failedFrame, setFailedFrame] = useState(false);
+  const onFrameUnavailable = useCallback(() => setFailedFrame(true), []);
   const { title, author } = videoLabel(video, preview);
   const cover = video.isMock ? video.cover : preview?.thumbnailUrl;
   const showCover = cover && cover !== failedCover && !inline;
+  const frame = officialCatalogFrame(video);
+  const eligible = Boolean(frame && automaticEnabled && !showCover && !waitingForCover && !failedFrame);
+  const showFrame = eligible && automatic;
   const embed = officialEmbed(video);
+
+  useEffect(() => {
+    const marker = anchor.current;
+    if (!eligible || !marker || typeof IntersectionObserver === "undefined") return;
+    // A stable point near the card top keeps eligibility independent of the iframe's height.
+    const observer = new IntersectionObserver(([entry]) => onVisibility(video.id, entry.isIntersecting));
+    observer.observe(marker);
+    return () => {
+      observer.disconnect();
+      onVisibility(video.id, false);
+    };
+  }, [eligible, onVisibility, video.id]);
+
   const open = () => onOpen(video, preview);
   const badge = <PlatformBadge platform={video.platform} />;
   const favorite = <FavoriteButton video={video} title={title} saved={saved} busy={busy} onFavorite={onFavorite} />;
 
-  return <article className="panel video-card" ref={ref}>
-    {showCover ? <div className="video-cover">
+  function prioritizeFrame() {
+    if (frame && automaticEnabled) onFrameFocus(video.id);
+  }
+
+  return <article className="panel video-card" ref={ref}
+    onPointerEnter={(event) => { if (event.pointerType === "mouse") prioritizeFrame(); }}
+    onFocus={prioritizeFrame}>
+    <span className="catalog-frame-anchor" ref={anchor} aria-hidden="true" />
+    {showCover || showFrame ? <div className="video-cover">
+      {showFrame && frame && <CatalogVideoFrame src={frame} title={`Кадр: ${title}`} onUnavailable={onFrameUnavailable} />}
       <button className="cover-trigger" onClick={open} aria-label={`Подробнее: ${title}`}>
-        <Image src={cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw"
-          unoptimized referrerPolicy="no-referrer" onError={() => setFailedCover(cover)} />
+        {showCover && <Image src={cover} alt="" fill sizes="(max-width: 660px) 100vw, (max-width: 1260px) 45vw, 26vw"
+          unoptimized referrerPolicy="no-referrer" onError={() => setFailedCover(cover)} />}
         <span className="play-mark" aria-hidden="true"><Play size={19} fill="currentColor" /></span>
       </button>
       {badge}{favorite}
@@ -127,6 +163,9 @@ function VideoCard({ video, saved, busy, inline, onTogglePreview, onOpen, onFavo
         {video.publishedAt && <PublicationDate value={video.publishedAt} />}
       </p>
       {!video.isMock && <p className="video-card-description">{video.description || "Описание не добавлено"}</p>}
+      {!video.isMock && video.hashtags.length > 0 && <div className="tags catalog-tags">
+        {video.hashtags.slice(0, 3).map((tag) => <span key={tag}>#{tag}</span>)}
+      </div>}
       <VideoMetrics video={video} />
       {embed && <button className="button secondary catalog-preview-button" type="button"
         onClick={onTogglePreview} aria-expanded={inline} aria-controls={`preview-${video.id}`}>
@@ -134,7 +173,7 @@ function VideoCard({ video, saved, busy, inline, onTogglePreview, onOpen, onFavo
       </button>}
     </div>
     {embed && <div id={`preview-${video.id}`} className={inline ? "catalog-player" : undefined} hidden={!inline}>
-      {inline && <EmbeddedVideo video={video} src={embed} />}
+      {inline && <EmbeddedVideo video={video} src={embed} hideFailedFrame />}
     </div>}
   </article>;
 }
@@ -155,11 +194,35 @@ function VideoTableRow({ video, saved, busy, onOpen, onFavorite }: EntryProps) {
 export function VideoResults(props: Props) {
   const { videos, favorites, view, sort, busy, emptyHint, onView, onSort, onOpen, onFavorite } = props;
   const [inlineId, setInlineId] = useState<string>();
+  const [focusedFrame, setFocusedFrame] = useState<string>();
+  const [visible, setVisible] = useState<ReadonlySet<string>>(() => new Set());
+  const { limit, reducedData } = useCatalogFrameLimit();
+  const automaticEnabled = view === "grid" && props.showCatalogFrames && !props.pauseCatalogFrames && !inlineId && limit > 0;
+  const visibleIds = automaticEnabled ? videos.filter((video) => visible.has(video.id)).map(({ id }) => id) : [];
+  const prioritized = focusedFrame && visibleIds.includes(focusedFrame)
+    ? [focusedFrame, ...visibleIds.filter((id) => id !== focusedFrame)] : visibleIds;
+  const active = new Set(prioritized.slice(0, limit));
+  const hasFrames = view === "grid" && videos.some((video) => Boolean(officialCatalogFrame(video)));
+  const onVisibility = useCallback((id: string, intersects: boolean) => {
+    setVisible((current) => {
+      if (current.has(id) === intersects) return current;
+      const next = new Set(current);
+      if (intersects) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
 
   return <>
     <div className="results-toolbar">
       <span className="result-counter" role="status"><Film size={16} /> Найдено: {videos.length}</span>
       <div className="display-options">
+        {hasFrames && <button className="button secondary catalog-frames-toggle" type="button"
+          aria-pressed={props.showCatalogFrames && !reducedData} disabled={reducedData}
+          title={reducedData ? "Отключено в режиме экономии трафика" : undefined}
+          onClick={() => props.onCatalogFramesChange(!props.showCatalogFrames)}>
+          <ImageIcon size={16} aria-hidden="true" /> Кадры в сетке
+        </button>}
         <label className="sort-label"><span className="sr-only">Сортировка</span>
           <select value={sort} disabled={busy} onChange={(event) => onSort(event.target.value as Sort)}>
             {Object.entries(sortOptions).map(([key, title]) => <option key={key} value={key}>{title}</option>)}
@@ -178,6 +241,7 @@ export function VideoResults(props: Props) {
     </div> : view === "grid" ? <div className="video-grid">
       {videos.map((video) => <VideoCard key={video.id}
         video={video} saved={favorites.includes(video.id)} busy={busy} inline={inlineId === video.id}
+        automatic={active.has(video.id)} automaticEnabled={automaticEnabled} onVisibility={onVisibility} onFrameFocus={setFocusedFrame}
         onTogglePreview={() => setInlineId((id) => id === video.id ? undefined : video.id)}
         onOpen={(entry, preview) => { setInlineId(undefined); onOpen(entry, preview); }} onFavorite={onFavorite}
       />)}
