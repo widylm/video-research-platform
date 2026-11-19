@@ -381,8 +381,12 @@ test("retired cover and thumbnail endpoints are absent in the team workspace", a
   const page = await signedInAs(t, "admin");
   const id = "69000000-0000-4000-8000-000000000001";
   for (const suffix of ["cover", "preview"]) {
-    const response = await page.request.get(`${stack.appUrl}/api/videos/${id}/${suffix}`);
-    assert.equal(response.status(), 404);
+    const url = `${stack.appUrl}/api/videos/${id}/${suffix}`;
+    const anonymous = await fetch(url, { redirect: "manual" });
+    assert.equal(anonymous.status, 404);
+    await anonymous.body?.cancel();
+    const authenticated = await page.request.get(url);
+    assert.equal(authenticated.status(), 404);
   }
   await button(page, videoTitle).click();
   const dialog = page.getByRole("dialog");
