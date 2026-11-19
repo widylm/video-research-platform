@@ -11,6 +11,7 @@ import type { Profile } from "@/lib/supabase";
 import { defaultSearch, sortVideos, type SearchQuery, type Sort, type Video } from "@/lib/videos";
 import { AddVideoDialog } from "./add-video-dialog";
 import { Brand } from "./brand";
+import { BulkSearchPilot } from "./bulk-search-pilot";
 import { Collections } from "./collections";
 import { SearchForm } from "./search-form";
 import { VideoDialog } from "./video-dialog";
@@ -18,6 +19,7 @@ import { VideoResults } from "./video-results";
 
 const sections = {
   search: { label: "Поиск видео", icon: Search, subtitle: "Исследуйте демонстрационные карточки коротких видео для TikTok и Instagram." },
+  pilot: { label: "Массовый поиск", icon: FlaskConical, subtitle: "Проверьте пакетный поиск TikTok и Instagram Reels на тестовых данных." },
   favorites: { label: "Избранное", icon: Heart, subtitle: "Личная подборка видео, которые вы сохранили." },
   collections: { label: "Коллекции", icon: Folder, subtitle: "Собирайте видео по темам и делитесь подборками с командой." },
 } as const;
@@ -165,7 +167,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
     setCollectionId(undefined);
     setError("");
     if (next === "search" && profile) search(applied, false);
-    if (next !== "search") reload();
+    if (next === "favorites" || next === "collections") reload();
   }
 
   const sorted = section === "search" ? videos : sortVideos(
@@ -221,7 +223,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
               : section === "search" && profile ? "Ищите видео, сохранённые в каталоге команды."
                 : sections[section].subtitle}</p>
           </div>
-          {profile && canEdit && <button className="button primary" type="button" disabled={sessionBusy}
+          {profile && canEdit && section !== "pilot" && <button className="button primary" type="button" disabled={sessionBusy}
             onClick={() => setAdding(true)}><Plus size={18} /> Добавить видео</button>}
         </div>
 
@@ -232,6 +234,8 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
             search(query === defaultSearch ? defaultSearch : { ...query, sort: applied.sort });
           }}
         />}
+
+        {section === "pilot" && <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />}
 
         {section === "collections" && <Collections
           collections={library.collections} active={activeCollection} canEdit={canEdit}
@@ -252,7 +256,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
         />}
 
         {error && !selected && <p className="notice error" role="alert">{error}</p>}
-        {(section !== "collections" || activeCollection) && <section className="results-section" aria-label="Видео">
+        {section !== "pilot" && (section !== "collections" || activeCollection) && <section className="results-section" aria-label="Видео">
           {section === "search" && <h2>{profile ? "Результаты по каталогу" : "Результаты поиска"}</h2>}
           <VideoResults key={activeCollection?.id ?? section}
             videos={sorted} favorites={library.favorites} view={view}
