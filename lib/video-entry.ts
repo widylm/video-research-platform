@@ -12,9 +12,22 @@ export function searchTerms(value: string) {
 
 export const tagTerms = (value: string) => searchTerms(value).map((word) => word.replace(/^#/, "")).filter(Boolean);
 
+const title = z.string().trim().max(120);
+const description = z.string().trim().max(2200);
+export const videoIdSchema = z.uuid();
+
+export const videoDetailsSchema = z.object({
+  id: videoIdSchema,
+  title: title.min(1),
+  description,
+  author: z.string().trim().transform((value) => value.replace(/^@/, ""))
+    .pipe(z.string().regex(/^[A-Za-z0-9_.]{0,30}$/)).optional(),
+});
+
 export const videoEntrySchema = z.object({
   url: z.string().trim().min(1).max(2048),
-  description: z.string().trim().max(2200),
+  title: title.default(""),
+  description,
   publishedAt: optionalPublicationDate.transform((date) => date || null),
   hashtags: z.string().max(600)
     .transform((value) => Array.from(new Set(tagTerms(value))))

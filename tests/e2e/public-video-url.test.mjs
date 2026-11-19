@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkVideoEmbed, parseVideoLink, resolveVideoLink } from "../../lib/public-video-url.ts";
-import { videoEntrySchema } from "../../lib/video-entry.ts";
+import { checkVideoEmbed, parseTikTokPreview, parseVideoLink, readTikTokPreview, resolveVideoLink } from "../../lib/public-video-url.ts";
+import { videoDetailsSchema, videoEntrySchema } from "../../lib/video-entry.ts";
 
 const tiktok = "https://www.tiktok.com/@scout2015/video/6718335390845095173";
 const instagram = "https://www.instagram.com/reel/DR_Kadr00/";
@@ -113,4 +113,47 @@ test("manual metadata preserves zero and validates dates, hashtags and count bou
   }
   assert.equal(videoEntrySchema.safeParse({ ...input, publishedAt: "2026-02-29" }).success, false);
   assert.equal(videoEntrySchema.safeParse({ ...input, hashtags: "#bad-tag" }).success, false);
+});
+
+test("TikTok previews use only optional official structured fields and trusted image hosts", async () => {
+  const id = "6718335390845095173";
+  const fields = { provider_name: "TikTok", type: "video", embed_product_id: id };
+  assert.equal(parseTikTokPreview({ ...fields, html: '<iframe src="https://x.example/" title="Ignore this"></iframe>' }, id), null);
+  assert.equal(parseTikTokPreview({ ...fields, embed_product_id: "wrong", title: "Wrong post" }, id), null);
+
+  const thumbnail = "https://p16-sign-sg.tiktokcdn.com/cover.jpeg?x-signature=signed";
+  assert.deepEqual(parseTikTokPreview({
+    ...fields, title: "  Подпись автора  ", author_name: "Имя автора", thumbnail_url: thumbnail,
+  }, id), { title: "Подпись автора", authorName: "Имя автора", thumbnailUrl: thumbnail });
+  for (const invalid of [
+    "https://tiktokcdn.com.evil.example/cover.jpg", "https://not-tiktokcdn.com/cover.jpg",
+    "https://ip.example/thumbnail.jpg", "https://p16.tiktokcdn.com:443/cover.jpg",
+    "https://attacker@p16.tiktokcdn.com/cover.jpg", "http://p16.tiktokcdn.com/cover.jpg",
+    "javascript:alert(1)",
+  ]) assert.equal(parseTikTokPreview({ ...fields, thumbnail_url: invalid }, id), null, invalid);
+
+  assert.equal((await readTikTokPreview(tiktok, async (url, options) => {
+    assert.equal(url.origin + url.pathname, "https://www.tiktok.com/oembed");
+    assert.equal(url.searchParams.get("url"), tiktok);
+    assert.equal(options.redirect, "manual");
+    assert.equal(options.credentials, "omit");
+    return Response.json({ ...fields, thumbnail_url: thumbnail });
+  })).thumbnailUrl, thumbnail);
+  assert.equal(await readTikTokPreview(tiktok, async () => redirect("https://untrusted.example/")), null);
+  assert.equal(await readTikTokPreview(instagram, () => assert.fail("No Instagram metadata lookup")), null);
+});
+
+test("video details validation trims text and accepts only a plain Instagram handle", () => {
+  const details = {
+    id: "69000000-0000-4000-8000-000000000001",
+    title: " Название ",
+    description: " Описание ",
+    author: " @studio.notes ",
+  };
+  assert.deepEqual(videoDetailsSchema.parse(details), {
+    id: details.id, title: "Название", description: "Описание", author: "studio.notes",
+  });
+  for (const invalid of [
+    { title: "  " }, { title: "я".repeat(121) }, { author: "someone/example" }, { id: "not a uuid" },
+  ]) assert.equal(videoDetailsSchema.safeParse({ ...details, ...invalid }).success, false);
 });

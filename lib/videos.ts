@@ -22,6 +22,25 @@ export interface Video {
   isMock: boolean;
 }
 
+export interface VideoPreview {
+  title?: string;
+  authorName?: string;
+  thumbnailUrl?: string;
+}
+
+export function platformVideoTitle(platform: Platform) {
+  return platform === "tiktok" ? "Видео TikTok" : "Публикация Instagram";
+}
+
+export function videoLabel(video: Video, preview?: VideoPreview) {
+  const fallback = platformVideoTitle(video.platform);
+  const legacy = `Видео ${platformNames[video.platform]} · ${video.externalId}`;
+  const manual = video.title === legacy || video.title === fallback ? "" : video.title.trim();
+  const title = manual || preview?.title || video.description.split(/\r?\n/, 1)[0]?.trim() || fallback;
+  const author = preview?.authorName || (video.author ? `@${video.author}` : "");
+  return { title, author, editableTitle: manual || preview?.title?.slice(0, 120) || "" };
+}
+
 export const sortOptions = {
   recent: "Сначала новые",
   views: "По просмотрам",
