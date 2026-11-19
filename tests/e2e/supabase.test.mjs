@@ -516,7 +516,7 @@ test("editors manage manual covers and viewers see them in the catalog and colle
 
   const card = (page, video) => page.locator("article").filter({ has: button(page, video.title) });
   const visibleCover = (page, video) => card(page, video).locator(".video-cover img");
-  const manualCover = (page, video) => visibleCover(page, video).and(page.locator(`img[src^="${coverPath(video)}?v="]`));
+  const manualCover = (page, video) => visibleCover(page, video).and(page.locator(`img[src*="${coverPath(video)}?v="]`));
   const tikCover = visibleCover(editor, tikTok).and(editor.locator(`img[src="${original}"]`));
   await card(editor, tikTok).scrollIntoViewIfNeeded();
   await tikCover.waitFor();
