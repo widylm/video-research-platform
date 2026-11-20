@@ -16,6 +16,7 @@
     "cf:preview": "opennextjs-cloudflare preview",
     "cf:deploy": "opennextjs-cloudflare deploy",
     "sync:fashion-radar": "node --experimental-strip-types scripts/fashion-radar-sync.mjs",
+    "package:fashion-radar-local": "node scripts/package-fashion-radar-local-journal.mjs",
     "test:e2e": "node --experimental-strip-types --test tests/e2e/*.test.mjs"
   },
   "dependencies": {
@@ -37,6 +38,7 @@
     "@types/pg": "8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "esbuild": "0.28.2",
     "eslint": "^9.39.0",
     "eslint-config-next": "15.5.29",
     "playwright": "1.65.1",
