@@ -15,6 +15,7 @@
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare preview",
     "cf:deploy": "opennextjs-cloudflare deploy",
+    "sync:fashion-radar": "node --experimental-strip-types scripts/fashion-radar-sync.mjs",
     "test:e2e": "node --experimental-strip-types --test tests/e2e/*.test.mjs"
   },
   "dependencies": {
