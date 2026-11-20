@@ -12,6 +12,7 @@ import { defaultSearch, sortVideos, type SearchQuery, type Sort, type Video } fr
 import { AddVideoDialog } from "./add-video-dialog";
 import { Brand } from "./brand";
 import { BulkSearchPilot } from "./bulk-search-pilot";
+import { CloudBrowserSearch } from "./cloud-browser-search";
 import { Collections } from "./collections";
 import { SearchForm } from "./search-form";
 import { VideoDialog } from "./video-dialog";
@@ -59,10 +60,11 @@ function changeDemoLibrary(library: Library, command: LibraryCommand): Library {
   }
 }
 
-export function Dashboard({ initialVideos, initialLibrary, profile }: {
+export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowserSearch }: {
   initialVideos: Video[];
   initialLibrary: Library;
   profile: Profile | null;
+  cloudBrowserSearch?: boolean;
 }) {
   const [section, setSection] = useState<Section>("search");
   const [draft, setDraft] = useState(defaultSearch);
@@ -221,7 +223,8 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
             <h1>{title}</h1>
             <p>{activeCollection ? (activeCollection.shared ? "Коллекция для команды" : "Личная коллекция")
               : section === "search" && profile ? "Ищите видео, сохранённые в каталоге команды."
-                : sections[section].subtitle}</p>
+                : section === "pilot" && cloudBrowserSearch ? "Проверьте облачный поиск на разрешённом тестовом источнике."
+                  : sections[section].subtitle}</p>
           </div>
           {profile && canEdit && section !== "pilot" && <button className="button primary" type="button" disabled={sessionBusy}
             onClick={() => setAdding(true)}><Plus size={18} /> Добавить видео</button>}
@@ -235,7 +238,8 @@ export function Dashboard({ initialVideos, initialLibrary, profile }: {
           }}
         />}
 
-        {section === "pilot" && <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />}
+        {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch />
+          : <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />)}
 
         {section === "collections" && <Collections
           collections={library.collections} active={activeCollection} canEdit={canEdit}

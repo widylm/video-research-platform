@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer } from "node:http";
+import { once } from "node:events";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright";
 import { recordFashionRadarCompletion } from "../../lib/fashion-radar/completion.ts";
@@ -44,11 +46,11 @@ function tikTokPlayer(route, errorCode) {
   });
 }
 
-async function loginPage(t) {
+async function loginPage(t, appUrl = stack.appUrl) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   t.after(() => page.close());
   await page.route("https://www.tiktok.com/player/v1/*", (route) => tikTokPlayer(route));
-  await page.goto(stack.appUrl);
+  await page.goto(appUrl);
   await page.waitForURL("**/login");
   await page.getByRole("heading", { name: loginTitle }).waitFor();
   return page;
@@ -60,14 +62,67 @@ async function submitLogin(page, role, password = stack.users[role].password) {
   await button(page, "Войти").click();
 }
 
-async function signedInAs(t, role) {
+async function signedInAs(t, role, appUrl) {
   const roles = { admin: "Администратор", member: "Участник", viewer: "Наблюдатель" };
-  const page = await loginPage(t);
+  const page = await loginPage(t, appUrl);
   await submitLogin(page, role);
   await page.getByText(stack.users[role].name, { exact: true }).waitFor();
   await page.getByText(roles[role], { exact: true }).waitFor();
   return page;
 }
+
+test("the authenticated Кадр UI runs a server-side Wrangler Browser Run session and shows a neutral document", { timeout: 120_000 }, async (t) => {
+  let hits = 0;
+  let unexpected = 0;
+  let userAgent = "";
+  const fixture = createServer((incoming, outgoing) => {
+    if (incoming.url !== "/catalog") { unexpected += 1; return outgoing.writeHead(404).end(); }
+    hits += 1;
+    userAgent = incoming.headers["user-agent"] ?? "";
+    setTimeout(() => outgoing.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(
+      '<!doctype html><title>Botanical collection</title><main><h1>Catalogue of mosses</h1><p>A neutral document about mosses.</p><img src="/unexpected.png"></main>',
+    ), 1_300);
+  });
+  fixture.listen(0, "127.0.0.1");
+  await once(fixture, "listening");
+  t.after(() => { fixture.close(); fixture.closeAllConnections(); });
+  const source = `http://127.0.0.1:${fixture.address().port}/catalog`;
+  const preview = await stack.startCloudBrowser(source);
+  const api = preview.url + "/api/cloud-browser";
+  const input = { platform: "all", keywords: "mosses", limit: 10 };
+  assert.equal((await fetch(stack.appUrl + "/api/cloud-browser")).status, 404);
+  assert.equal((await fetch(api)).status, 401);
+  const viewer = await signedInAs(t, "viewer", preview.url);
+  assert.equal((await viewer.request.post(api, { data: input })).status(), 403);
+  const editor = await signedInAs(t, "member", preview.url);
+  assert.equal((await editor.request.post(api, { data: input, headers: { origin: "https://other.example" } })).status(), 403);
+  assert.equal((await editor.request.post(api, { data: { ...input, platform: "tiktok" } })).status(), 400);
+  await button(editor, "Массовый поиск").click();
+  await editor.getByLabel("Ключевые слова").fill("mosses");
+  const accepted = editor.waitForResponse((response) => response.url() === api && response.request().method() === "POST");
+  await button(editor, "Найти").click();
+  const submitted = await accepted;
+  const submission = await submitted.json();
+  assert.equal(submitted.status(), 202, JSON.stringify(submission));
+  assert.equal(submission.job.state, "pending");
+  assert.equal((await editor.request.post(api, { data: input })).status(), 409);
+  const results = editor.getByRole("region", { name: "Результаты облачной проверки" });
+  await results.getByRole("heading", { name: "Catalogue of mosses" }).waitFor({ timeout: 55_000 }).catch(async (error) => {
+    const response = await editor.request.get(api);
+    throw new Error(`${error.message}\n${await response.text()}\n${preview.logs()}`);
+  });
+  await results.getByText("A neutral document about mosses.").waitFor();
+  assert.equal(await results.getByRole("link").getAttribute("href"), source);
+  assert.equal(hits, 1);
+  assert.match(userAgent, /Chrome/);
+  assert.equal(unexpected, 0);
+  await editor.reload();
+  await button(editor, "Массовый поиск").click();
+  await results.getByRole("heading", { name: "Catalogue of mosses" }).waitFor();
+  assert.equal(hits, 1);
+  const admin = await signedInAs(t, "admin", preview.url);
+  assert.deepEqual(await (await admin.request.get(api)).json(), { job: null });
+});
 
 test("password sign-in loads the profile and sign-out clears the session", { timeout: 40_000 }, async (t) => {
   const page = await loginPage(t);
