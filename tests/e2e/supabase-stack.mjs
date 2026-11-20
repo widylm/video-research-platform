@@ -98,6 +98,7 @@ export async function startSupabaseStack() {
   let proxy;
   let worker;
   let radarServer;
+  let cloudBrowserServer;
 
   async function stopProcess(child) {
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
@@ -107,6 +108,7 @@ export async function startSupabaseStack() {
   }
 
   async function stop() {
+    await stopProcess(cloudBrowserServer);
     await stopProcess(radarServer);
     await stopProcess(worker);
     if (proxy?.listening) {
@@ -270,7 +272,39 @@ KADR_FASHION_RADAR_ENABLED=1\nKADR_FASHION_RADAR_DB_URL=${databaseUrl}\n`, { mod
       return { endpoint, enroll };
     }
 
-    return { appUrl, users, restAs, coverRequests, stop, startRadarReceiver };
+    async function startCloudBrowser(sourceUrl) {
+      const browserDir = join(dir, "cloud-browser");
+      await mkdir(browserDir);
+      const appConfig = join(browserDir, "wrangler.jsonc");
+      const executorConfig = join(browserDir, "executor.jsonc");
+      await copyFile(join(repo, "wrangler.cloud-browser.jsonc"), appConfig);
+      await symlink(join(repo, ".open-next"), join(browserDir, ".open-next"), "dir");
+      await copyFile(join(dir, ".dev.vars"), join(browserDir, ".dev.vars"));
+      const config = JSON.parse(await readFile(join(repo, "workers/cloud-browser/wrangler.jsonc"), "utf8"));
+      config.main = join(repo, "workers/cloud-browser/index.ts");
+      config.vars = { KADR_BROWSER_SOURCE: "local", KADR_BROWSER_SOURCE_URL: sourceUrl };
+      await writeFile(executorConfig, JSON.stringify(config));
+      const probe = createServer();
+      const apiPort = await listen(probe);
+      await new Promise((resolve, reject) => probe.close((error) => error ? reject(error) : resolve()));
+      cloudBrowserServer = spawn(process.execPath, [join(repo, "node_modules/wrangler/bin/wrangler.js"), "dev", "--local",
+        "-c", appConfig, "-c", executorConfig, "--ip", "127.0.0.1", "--port", String(apiPort), "--inspector-port", "0"], {
+        cwd: browserDir, stdio: ["ignore", "pipe", "pipe"], env: {
+          ...workerEnv, CI: "1", CLOUDFLARE_CF_FETCH_ENABLED: "false", XDG_CACHE_HOME: process.env.XDG_CACHE_HOME || join(dir, "cache"),
+        },
+      });
+      let log = "";
+      for (const stream of [cloudBrowserServer.stdout, cloudBrowserServer.stderr]) {
+        stream.on("data", (data) => { log = (log + data).slice(-3_000); });
+      }
+      const url = `http://127.0.0.1:${apiPort}`;
+      await waitFor(url + "/api/cloud-browser", [401]).catch((error) => {
+        throw new Error(`${error.message}\n${redact(log)}`);
+      });
+      return { url, logs: () => redact(log) };
+    }
+
+    return { appUrl, users, restAs, coverRequests, stop, startRadarReceiver, startCloudBrowser };
   } catch (error) {
     try {
       await stop();

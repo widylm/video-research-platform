@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "kadr-cloud-browser-executor",
+  "main": "index.ts",
+  "compatibility_date": "2026-11-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "browser": { "binding": "BROWSER" },
+  "durable_objects": { "bindings": [{ "name": "CLOUD_BROWSER_JOBS", "class_name": "CloudBrowserJobs" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CloudBrowserJobs"] }],
+  "observability": { "enabled": false }
+}
