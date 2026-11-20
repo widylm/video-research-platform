@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { access, copyFile, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -97,13 +97,18 @@ export async function startSupabaseStack() {
   const coverRequests = [];
   let proxy;
   let worker;
+  let radarServer;
+
+  async function stopProcess(child) {
+    if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    const exited = once(child, "exit");
+    child.kill("SIGTERM");
+    await exited;
+  }
 
   async function stop() {
-    if (worker && worker.exitCode === null && worker.signalCode === null) {
-      const exited = once(worker, "exit");
-      worker.kill("SIGTERM");
-      await exited;
-    }
+    await stopProcess(radarServer);
+    await stopProcess(worker);
     if (proxy?.listening) {
       proxy.close();
       proxy.closeAllConnections();
@@ -120,6 +125,7 @@ export async function startSupabaseStack() {
     sql(`
       create role anon nologin;
       create role authenticated nologin;
+      create role service_role nologin bypassrls;
       create role authenticator noinherit login password '${restPassword}';
       grant anon, authenticated to authenticator;
       create schema auth;
@@ -166,7 +172,7 @@ export async function startSupabaseStack() {
         throw new Error(`Could not provision the ${role} test account (HTTP ${response.status}).`);
       }
       if (name) sql(`insert into public.profiles (id, display_name, role) values ('${id}', '${name}', '${role}');`);
-      users[role] = { email, password, name };
+      users[role] = { id, email, password, name };
     }
 
     await copyFile(join(repo, "wrangler.jsonc"), join(dir, "wrangler.jsonc"));
@@ -212,7 +218,59 @@ export async function startSupabaseStack() {
       });
     }
 
-    return { appUrl, users, restAs, coverRequests, stop };
+    async function startRadarReceiver() {
+      sql(await readFile(join(repo, "supabase/review/20261120134027_fashion_radar_sync.sql"), "utf8"));
+      const certificate = join(dir, "radar-postgres.crt");
+      const key = join(dir, "radar-postgres.key");
+      const cert = spawnSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-noenc", "-days", "1",
+        "-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1", "-out", certificate, "-keyout", key],
+      { encoding: "utf8", timeout: 10_000 });
+      if (cert.status !== 0) throw new Error("Could not generate the isolated Postgres TLS certificate.");
+      compose(["cp", certificate, "db:/tmp/radar-postgres.crt"]);
+      compose(["cp", key, "db:/tmp/radar-postgres.key"]);
+      compose(["exec", "-T", "-u", "root", "db", "chown", "postgres:postgres", "/tmp/radar-postgres.key", "/tmp/radar-postgres.crt"]);
+      compose(["exec", "-T", "-u", "root", "db", "chmod", "600", "/tmp/radar-postgres.key"]);
+      sql(`
+        alter system set ssl_cert_file = '/tmp/radar-postgres.crt';
+        alter system set ssl_key_file = '/tmp/radar-postgres.key';
+        alter system set ssl = on;
+        select pg_reload_conf();
+        notify pgrst, 'reload schema';
+      `);
+      for (let attempt = 0; !sql("show ssl;").includes("on"); attempt += 1) {
+        if (attempt === 10) throw new Error("Test Postgres did not load TLS settings.");
+        await delay(200);
+      }
+      const receiverPassword = testValue();
+      sql(`alter role kadr_radar_ingest login password '${receiverPassword}';`);
+      function enroll(role, platforms) {
+        const id = randomUUID();
+        const secret = testValue();
+        const digest = createHash("sha256").update(secret).digest("hex");
+        const scope = platforms.map((platform) => `'${platform}'`).join(",");
+        sql(`insert into private.fashion_radar_devices (id, profile_id, secret_sha256, allowed_platforms, expires_at)
+          values ('${id}', '${users[role].id}', '${digest}', array[${scope}]::public.video_platform[], now() + interval '10 minutes');`);
+        return { token: `${id}.${secret}`, revoke: () => sql(`update private.fashion_radar_devices set revoked_at = now() where id = '${id}';`) };
+      }
+
+      const probe = createServer();
+      const apiPort = await listen(probe);
+      await new Promise((resolve, reject) => probe.close((error) => error ? reject(error) : resolve()));
+      const radarDir = join(dir, "radar-worker");
+      await mkdir(radarDir);
+      await copyFile(join(repo, "wrangler.jsonc"), join(radarDir, "wrangler.jsonc"));
+      await symlink(join(repo, ".open-next"), join(radarDir, ".open-next"), "dir");
+      const databaseUrl = `postgresql://kadr_radar_ingest:${receiverPassword}@127.0.0.1:${port("db", 5432)}/postgres`;
+      await writeFile(join(radarDir, ".dev.vars"), `SUPABASE_URL=${supabaseUrl}\nSUPABASE_PUBLISHABLE_KEY=${anonKey}
+KADR_FASHION_RADAR_ENABLED=1\nKADR_FASHION_RADAR_DB_URL=${databaseUrl}\n`, { mode: 0o600 });
+      radarServer = spawn(process.execPath, [join(repo, "node_modules/wrangler/bin/wrangler.js"), "dev", "--ip", "127.0.0.1",
+        "--port", String(apiPort)], { cwd: radarDir, stdio: "ignore", env: { ...workerEnv, NODE_EXTRA_CA_CERTS: certificate } });
+      const endpoint = `http://127.0.0.1:${apiPort}/api/integrations/fashion-radar`;
+      await waitFor(endpoint, [405]);
+      return { endpoint, enroll };
+    }
+
+    return { appUrl, users, restAs, coverRequests, stop, startRadarReceiver };
   } catch (error) {
     try {
       await stop();

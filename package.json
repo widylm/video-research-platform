@@ -15,6 +15,7 @@
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare preview",
     "cf:deploy": "opennextjs-cloudflare deploy",
+    "sync:fashion-radar": "node --experimental-strip-types scripts/fashion-radar-sync.mjs",
     "test:e2e": "node --experimental-strip-types --test tests/e2e/*.test.mjs"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "@supabase/supabase-js": "2.119.0",
     "lucide-react": "0.577.0",
     "next": "15.5.29",
+    "pg": "8.23.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^4.4.0"
@@ -32,6 +34,7 @@
     "@opennextjs/cloudflare": "1.20.17",
     "@tailwindcss/postcss": "4.3.5",
     "@types/node": "^22.0.0",
+    "@types/pg": "8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "eslint": "^9.39.0",
