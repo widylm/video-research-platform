@@ -1,17 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, open, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { bulkImportSchema } from "../bulk-import.ts";
 import type { BulkPlatform } from "../bulk-search.ts";
 import {
   fashionRadarBodyLimit, fashionRadarDeviceToken, fashionRadarPath, fashionRadarReceiptSchema, fashionRadarSources, prepareFashionRadarBatch,
 } from "./batch.ts";
+import { completionFileName, completionReport, completionSchema, syncDirectory } from "./completion.ts";
 
 const queueLimit = 16;
 const jobSchema = z.object({
   batch: bulkImportSchema,
-  rejected: z.number().int().min(0).max(50), duplicates: z.number().int().min(0).max(50),
+  ...completionReport, completionFile: z.string().regex(completionFileName).optional(),
   attempt: z.number().int().min(0).max(10), retryAt: z.number().int().min(0),
 });
 const queueSchema = z.object({
@@ -20,12 +21,12 @@ const queueSchema = z.object({
 type Queue = z.output<typeof queueSchema>;
 type SenderConfig = {
   enabled: boolean; endpoint: string; deviceToken: string;
-  resultsFile: string; queueFile: string; platforms: readonly BulkPlatform[];
-};
+  queueFile: string; platforms: readonly BulkPlatform[];
+} & ({ resultsFile: string; completionDir?: never } | { completionDir: string; resultsFile?: never });
 type Status = { state: "disabled" | "idle" | "queue_full" | "waiting" | "delivered" | "paused";
   sent?: number; rejected?: number; duplicates?: number; httpStatus?: number };
 
-async function readBounded(path: string, limit: number) {
+async function readBounded(path: string, limit: number, mutable = false) {
   const file = await open(path, "r").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null;
     throw error;
@@ -36,7 +37,10 @@ async function readBounded(path: string, limit: number) {
     if (!stat.isFile() || stat.size > limit) throw new Error("Local sync file exceeds its format limit.");
     const buffer = Buffer.alloc(stat.size + 1);
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
-    if (bytesRead !== stat.size || stat.mtimeMs !== (await file.stat()).mtimeMs) return null;
+    if (bytesRead !== stat.size || stat.mtimeMs !== (await file.stat()).mtimeMs) {
+      if (mutable) return null;
+      throw new Error("Durable sync file changed during read.");
+    }
     return { buffer: buffer.subarray(0, bytesRead), modifiedAt: stat.mtime };
   } finally {
     await file.close();
@@ -49,6 +53,7 @@ async function writeQueue(path: string, queue: Queue) {
   try {
     await writeFile(temporary, JSON.stringify(queue), { flag: "wx", mode: 0o600, flush: true });
     await rename(temporary, path);
+    await syncDirectory(dirname(path));
   } finally {
     await rm(temporary, { force: true });
   }
@@ -69,7 +74,7 @@ export function createFashionRadarSender(config: SenderConfig, request: typeof f
   const pathName = (path: string) => process.platform === "win32" ? resolve(path).toLowerCase() : resolve(path);
   if (!token || endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.port
     || endpoint.search || endpoint.hash || endpoint.pathname !== fashionRadarPath || !config.platforms.length
-    || pathName(config.resultsFile) === pathName(config.queueFile)) {
+    || (config.resultsFile && pathName(config.resultsFile) === pathName(config.queueFile))) {
     throw new Error("Invalid Fashion Radar sync settings.");
   }
   const binding = `${endpoint.origin}/${token[1]}`;
@@ -80,20 +85,48 @@ export function createFashionRadarSender(config: SenderConfig, request: typeof f
     working = true;
     try {
       const saved = await readBounded(config.queueFile, (fashionRadarBodyLimit + 512) * queueLimit + 1024);
-      const local = await readBounded(config.resultsFile, fashionRadarBodyLimit);
+      const local = config.resultsFile ? await readBounded(config.resultsFile, fashionRadarBodyLimit, true) : null;
       const revision = local ? `${local.modifiedAt.toISOString()}:${createHash("sha256").update(local.buffer).digest("hex")}` : null;
-      if (!saved) {
+      const queue: Queue = saved ? queueSchema.parse(JSON.parse(saved.buffer.toString("utf8")))
+        : { version: 1, binding, revision, jobs: [] };
+      if (!saved && config.resultsFile) {
         // Establish a baseline on first enable. Previous collections are not queued implicitly.
-        await writeQueue(config.queueFile, { version: 1, binding, revision, jobs: [] });
+        await writeQueue(config.queueFile, queue);
         return { state: "idle" };
       }
-      const queue = queueSchema.parse(JSON.parse(saved.buffer.toString("utf8")));
-      if (queue.binding !== binding || queue.jobs.some(({ batch }) => batch.videos.some((video) =>
-        !config.platforms.includes(video.platform) || video.source !== fashionRadarSources[video.platform]))) {
+      const allowed = (batch: Queue["jobs"][number]["batch"]) => batch.videos.every((video) =>
+        config.platforms.includes(video.platform) && video.source === fashionRadarSources[video.platform]);
+      if (queue.binding !== binding || queue.jobs.some(({ batch }) => !allowed(batch))) {
         throw new Error("Local sync queue belongs to a different connection or source.");
       }
 
       let status: Status = { state: "idle" };
+      if (config.completionDir) {
+        const names = (await readdir(config.completionDir).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        })).filter((name) => completionFileName.test(name)).sort();
+        for (const name of names) {
+          const path = join(config.completionDir, name);
+          if (queue.jobs.some(({ completionFile }) => completionFile === name)) {
+            await rm(path, { force: true }); // Copy was committed before a previous process stopped.
+            continue;
+          }
+          if (queue.jobs.length >= queueLimit) break; // Leave the pending collection in the journal.
+          const captured = await readBounded(path, fashionRadarBodyLimit + 512);
+          if (!captured) continue;
+          const { batch, rejected, duplicates } = completionSchema.parse(JSON.parse(captured.buffer.toString("utf8")));
+          if (batch) {
+            if (!allowed(batch)) throw new Error("Completion belongs to a source that is not allowed.");
+            queue.jobs.push({ batch, rejected, duplicates, completionFile: name, attempt: 0, retryAt: 0 });
+            await writeQueue(config.queueFile, queue);
+          } else {
+            status = { state: "delivered", sent: 0, rejected, duplicates };
+          }
+          await rm(path, { force: true });
+          break;
+        }
+      }
       if (local && revision !== queue.revision) {
         if (queue.jobs.length >= queueLimit) {
           status = { state: "queue_full" };

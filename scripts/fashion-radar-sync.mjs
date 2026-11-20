@@ -8,15 +8,16 @@ import { createFashionRadarSender } from "../lib/fashion-radar/sender.ts";
 async function main() {
   const { values } = parseArgs({ options: {
     enable: { type: "boolean", default: false }, endpoint: { type: "string" },
-    results: { type: "string" }, queue: { type: "string" }, platforms: { type: "string" },
+    results: { type: "string" }, completed: { type: "string" }, queue: { type: "string" }, platforms: { type: "string" },
   } });
   if (!values.enable) {
     console.log("Синхронизация отключена.");
     return;
   }
   const platforms = values.platforms?.split(",");
-  if (!values.endpoint || !values.results || !values.queue || !platforms?.every((value) => bulkPlatforms.includes(value))) {
-    console.error("Укажите --endpoint, --results, --queue и --platforms из списка tiktok,instagram.");
+  if (!values.endpoint || !values.queue || !!values.results === !!values.completed
+    || !platforms?.every((value) => bulkPlatforms.includes(value))) {
+    console.error("Укажите --endpoint, --queue, --platforms и один источник: --completed или --results.");
     process.exitCode = 1;
     return;
   }
@@ -29,7 +30,8 @@ async function main() {
   delete process.env.KADR_RADAR_DEVICE_TOKEN;
   const queueFile = resolve(values.queue);
   const poll = createFashionRadarSender({
-    enabled: true, endpoint: values.endpoint, queueFile, resultsFile: resolve(values.results), deviceToken, platforms,
+    enabled: true, endpoint: values.endpoint, queueFile, deviceToken, platforms,
+    ...(values.completed ? { completionDir: resolve(values.completed) } : { resultsFile: resolve(values.results) }),
   });
   const lock = `${queueFile}.lock`;
   await mkdir(dirname(queueFile), { recursive: true, mode: 0o700 });
