@@ -1,0 +1,45 @@
+{
+  "tiktokVideo": {
+    "id": "7000000000000000001",
+    "url": "https://m.tiktok.com/@fixture.cafe/video/7000000000000000001?tracking=example",
+    "author": { "uniqueId": "fixture.cafe" },
+    "title": "Домашний эспрессо",
+    "desc": "  Готовим эспрессо #Кофе #кофе #CAFÉ  ",
+    "createTime": "1793534400",
+    "video": { "duration": 15 },
+    "statsV2": { "playCount": "250", "diggCount": "0" },
+    "stats": { "diggCount": 4, "commentCount": 8 },
+    "challenges": [{ "title": "Рецепт" }],
+    "textExtra": [{ "hashtagName": "café" }, { "hashtagName": "не тег" }]
+  },
+  "tiktokMissing": {
+    "aweme_id": "7000000000000000002",
+    "videoInfo": {},
+    "statistics": { "play_count": "", "digg_count": false, "comment_count": "1.5" }
+  },
+  "instagramReel": {
+    "code": "Fixture_Reel-1",
+    "pk": "9000000000000000001",
+    "media_type": 2,
+    "permalink": "https://instagram.com/reels/Fixture_Reel-1/?igsh=example",
+    "user": { "username": "fixture.reels" },
+    "caption": { "text": "Молочная пенка #Латте" },
+    "taken_at": 1793534400,
+    "view_count": { "count": "1200" },
+    "play_count": 1800,
+    "like_count": 30,
+    "comment_count": 0
+  },
+  "instagramHidden": {
+    "shortcode": "Fixture_Reel-2",
+    "__typename": "GraphVideo",
+    "product_type": "clips",
+    "owner": { "username": "fixture.private_metrics" },
+    "edge_media_to_caption": { "edges": [{ "node": { "text": "Без хэштегов" } }] },
+    "taken_at_timestamp": null,
+    "video_view_count": 999,
+    "edge_media_preview_like": { "count": 25 },
+    "edge_media_to_comment": { "count": 2, "edges": [{ "node": { "text": "Тестовый комментарий" } }] },
+    "like_and_view_counts_disabled": true
+  }
+}
