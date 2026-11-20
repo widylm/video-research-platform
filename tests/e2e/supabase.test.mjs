@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { chromium } from "playwright";
+import { recordFashionRadarCompletion } from "../../lib/fashion-radar/completion.ts";
+import { createFashionRadarSender } from "../../lib/fashion-radar/sender.ts";
 import { startSupabaseStack } from "./supabase-stack.mjs";
 
 const loginTitle = "Вход в рабочее пространство";
@@ -475,6 +480,94 @@ async function addCatalogFixture(platform, externalId, overrides = {}) {
   const [{ video }] = await response.json();
   return video;
 }
+
+test("completed Fashion Radar runs reach the existing catalog via the protected receiver and dedicated Postgres role", { timeout: 100_000 }, async (t) => {
+  const path = "/api/integrations/fashion-radar";
+  assert.equal((await fetch(stack.appUrl + path, { method: "POST" })).status, 404);
+  const { endpoint, enroll } = await stack.startRadarReceiver();
+  const platforms = ["tiktok", "instagram"];
+  const device = enroll("member", platforms);
+  const viewer = enroll("viewer", platforms);
+  const folder = await mkdtemp(join(tmpdir(), "kadr-radar-live-path-test-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const directory = join(folder, "completed");
+  const externalId = "7000000000000000701";
+  const reelId = "SyncReelFixture1";
+  const tiktok = {
+    id: externalId, url: `https://www.tiktok.com/@studio.notes/video/${externalId}`, source: "public-page-data",
+    title: "Обжарка для пилота #фильтр", views: 0, likes: null, published_at: "2026-11-19T10:00:00.000Z",
+  };
+  const instagram = {
+    id: `ig_${reelId}`, platform: "instagram", verified_video: true, url: `https://www.instagram.com/reel/${reelId}/`,
+    title: "Рисунок молочной пены", likes: 0,
+  };
+  const completedAt = Date.now() - 60_000;
+  const complete = (collectionId, row, offset) => recordFashionRadarCompletion({
+    directory, platforms, collectionId, completedAt: new Date(completedAt + offset).toISOString(),
+    state: { phase: "done", items: [row] },
+  });
+  const first = await complete("take-1", tiktok, 0);
+  await complete("take-2", instagram, 1);
+  assert.equal(await complete("take-1", tiktok, 0), first);
+  assert.equal((await readdir(directory)).length, 2);
+
+  const post = (token) => fetch(endpoint, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: "{}" });
+  assert.equal((await post("invalid")).status, 401);
+  assert.equal((await post(viewer.token)).status, 403);
+  const config = { enabled: true, endpoint: `https://test-kadr.example${path}`, completionDir: directory, platforms,
+    deviceToken: device.token, queueFile: join(folder, "queue.json") };
+  let now = Date.now();
+  let attempts = 0;
+  const transport = async (_url, options) => {
+    attempts += 1;
+    const response = await fetch(endpoint, options); // Loopback transport, with real HTTP and Postgres TLS behind the receiver.
+    assert.equal(response.status, 200);
+    if (attempts === 1) {
+      await response.body?.cancel();
+      throw new Error("Lost response after the database committed");
+    }
+    return response;
+  };
+  assert.equal((await createFashionRadarSender(config, transport, () => now)()).state, "waiting");
+  const restarted = createFashionRadarSender(config, transport, () => now);
+  now += 5_000;
+  assert.deepEqual(await restarted(), { state: "delivered", sent: 0, rejected: 0, duplicates: 1 });
+  assert.deepEqual(await restarted(), { state: "delivered", sent: 1, rejected: 0, duplicates: 0 });
+  assert.equal(attempts, 3);
+  assert.deepEqual(await readdir(directory), []);
+
+  const lookup = (id) => stack.restAs("viewer", `videos?select=id,title,description,views,likes,is_mock,fashion_radar_managed&external_id=eq.${id}`);
+  const [video] = await (await lookup(externalId)).json();
+  assert.equal(video.views, 0);
+  assert.equal(video.likes, null);
+  assert.equal(video.is_mock, false);
+  assert.equal(video.fashion_radar_managed, true);
+  const [reel] = await (await lookup(reelId)).json();
+  assert.equal(reel.likes, 0);
+  assert.equal(reel.views, null);
+  const edited = await stack.restAs("member", `videos?id=eq.${video.id}`, {
+    method: "PATCH", body: JSON.stringify({ title: "Ручной заголовок для пилота", description: "Редактура команды" }),
+  });
+  assert.equal(edited.status, 204);
+  const favorite = await stack.restAs("member", "favorites", { method: "POST", body: JSON.stringify({ video_id: video.id }) });
+  assert.equal(favorite.status, 201);
+  await complete("take-3", { ...tiktok, title: "Обновлённая подпись платформы", views: 38 }, 2);
+  assert.deepEqual(await restarted(), { state: "delivered", sent: 1, rejected: 0, duplicates: 0 });
+  const [refreshed] = await (await lookup(externalId)).json();
+  assert.deepEqual(refreshed, { ...video, title: "Ручной заголовок для пилота", description: "Редактура команды", views: 38 });
+  const snapshots = await stack.restAs("viewer", `fashion_radar_snapshots?select=original_description,views&external_id=eq.${externalId}`);
+  assert.deepEqual(await snapshots.json(), [{ original_description: "Обновлённая подпись платформы", views: 38 }]);
+  const favorites = await stack.restAs("member", `favorites?select=video_id&video_id=eq.${video.id}`);
+  assert.deepEqual(await favorites.json(), [{ video_id: video.id }]);
+
+  const page = await signedInAs(t, "viewer");
+  await page.getByLabel("Ключевые слова").fill("Редактура команды");
+  await button(page, "Найти видео").click();
+  await page.getByText("Найдено: 1", { exact: true }).waitFor();
+  await button(page, "Ручной заголовок для пилота").waitFor();
+  device.revoke();
+  assert.equal((await post(device.token)).status, 401);
+});
 
 test("TikTok errors stay out of grid cards and the original link remains available", { timeout: 35_000 }, async (t) => {
   const externalId = "1299999999999999999";

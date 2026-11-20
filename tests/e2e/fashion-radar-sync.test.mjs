@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { bulkVideoKey } from "../../lib/bulk-search.ts";
 import { fashionRadarBodyLimit, fashionRadarPath, prepareFashionRadarBatch } from "../../lib/fashion-radar/batch.ts";
+import { recordFashionRadarCompletion } from "../../lib/fashion-radar/completion.ts";
+import { fashionRadarDbUrl } from "../../lib/fashion-radar/postgres.ts";
 import { createFashionRadarReceiver, hashFashionRadarSecret } from "../../lib/fashion-radar/receiver.ts";
 import { createFashionRadarSender } from "../../lib/fashion-radar/sender.ts";
 
@@ -32,9 +34,12 @@ function testStore(deviceChanges = {}, rate = 10) {
     active: true, role: "member", platforms, ...deviceChanges };
   let requests = 0;
   return {
-    byKey, device, async getDevice(deviceId) { return deviceId === id ? device : null; },
-    async takeRateSlot() { return ++requests <= rate; },
-    async save(_id, value) {
+    byKey, device, async claim(deviceId, digest) {
+      if (deviceId !== id || digest !== device.tokenDigest || device.revoked || device.expiresAt <= clock) return { status: 401 };
+      if (!device.active || device.role === "viewer") return { status: 403 };
+      return ++requests <= rate ? { status: 200, platforms: device.platforms } : { status: 429 };
+    },
+    async save(_id, _digest, value) {
       let sent = 0;
       for (const video of value.videos) {
         const key = `${bulkVideoKey(video)}:${video.source}`;
@@ -194,4 +199,43 @@ test("sender pauses on permanent rejection, refuses redirects and never rereads 
   assert.deepEqual(await sender(), { state: "paused", httpStatus: 307 });
   assert.equal(JSON.parse(await readFile(queueFile, "utf8")).jobs.length, 1);
   assert.equal(calls, 1);
+});
+
+test("the durable completion directory holds every run while the retry queue is full", async (t) => {
+  const folder = await mkdtemp(join(tmpdir(), "kadr-radar-completion-"));
+  t.after(() => rm(folder, { recursive: true, force: true }));
+  const directory = join(folder, "completed");
+  const runCount = 19;
+  for (let index = 0; index < runCount; index += 1) {
+    const externalId = `71000000000000000${String(index).padStart(2, "0")}`;
+    await recordFashionRadarCompletion({
+      directory, collectionId: `run-${index}`, completedAt: new Date(clock + index).toISOString(), platforms,
+      state: complete([{ ...tik, id: externalId, url: `https://www.tiktok.com/@demo.test/video/${externalId}` }]),
+    });
+  }
+  const queueFile = join(folder, "queue.json");
+  const config = { enabled: true, endpoint, deviceToken: token, completionDir: directory, queueFile, platforms };
+  let now = clock;
+  const pending = createFashionRadarSender(config, async () => new Response(null, { status: 503 }), () => now);
+  for (let index = 0; index < runCount; index += 1) assert.equal((await pending()).state, "waiting");
+  assert.equal((await readdir(directory)).length, 3);
+  assert.equal(JSON.parse(await readFile(queueFile, "utf8")).jobs.length, 16);
+
+  const observed = [];
+  const drain = createFashionRadarSender(config, async (_url, options) => {
+    observed.push(JSON.parse(options.body).videos[0].externalId);
+    return Response.json({ sent: 1, rejected: 0, duplicates: 0 });
+  }, () => now);
+  now += 5_000;
+  for (let index = 0; index < runCount; index += 1) assert.equal((await drain()).state, "delivered");
+  assert.equal(new Set(observed).size, runCount);
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test("the receiver configuration rejects privileged logins and URL options which could disable TLS", () => {
+  const url = "postgresql://kadr_radar_ingest.projectref:example@pooler.example:6543/postgres";
+  assert.ok(fashionRadarDbUrl(url));
+  assert.equal(fashionRadarDbUrl(url.replace("kadr_radar_ingest.projectref", "postgres.projectref")), null);
+  assert.equal(fashionRadarDbUrl(`${url}?sslmode=disable`), null);
+  assert.equal(fashionRadarDbUrl(url.replace(":example@", "@")), null);
 });

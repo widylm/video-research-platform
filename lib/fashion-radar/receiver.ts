@@ -1,18 +1,11 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { bulkImportSchema, type BulkImportBatch } from "../bulk-import.ts";
 import type { BulkPlatform } from "../bulk-search.ts";
 import { fashionRadarBodyLimit, fashionRadarDeviceToken, fashionRadarSources } from "./batch.ts";
 
-export type FashionRadarDevice = Readonly<{
-  tokenDigest: string; expiresAt: number; revoked: boolean;
-  active: boolean; role: "admin" | "member" | "viewer";
-  platforms: readonly BulkPlatform[];
-}>;
-
 export type FashionRadarStore = {
-  getDevice(id: string): Promise<FashionRadarDevice | null>;
-  takeRateSlot(id: string): Promise<boolean>;
-  save(id: string, batch: BulkImportBatch): Promise<{ sent: number; duplicates: number }>;
+  claim(id: string, digest: string): Promise<{ status: 401 | 403 | 429 } | { status: 200; platforms: readonly BulkPlatform[] }>;
+  save(id: string, digest: string, batch: BulkImportBatch): Promise<{ sent: number; duplicates: number } | null>;
 };
 
 const reply = (status: number, data: object, headers?: HeadersInit) =>
@@ -48,7 +41,6 @@ async function readBody(request: Request) {
   }
 }
 
-/** Isolated handler. The application does not mount a route or configure a backing store. */
 export function createFashionRadarReceiver(options: { enabled?: boolean; store?: FashionRadarStore; now?: () => number } = {}) {
   const { enabled, store, now = Date.now } = options;
   return async (request: Request): Promise<Response> => {
@@ -58,15 +50,14 @@ export function createFashionRadarReceiver(options: { enabled?: boolean; store?:
     const credentials = token && fashionRadarDeviceToken.exec(token[1]);
     if (!credentials) return reply(401, { error: "unauthorized" });
     const [, id, secret] = credentials;
+    const digest = hashFashionRadarSecret(secret);
 
     try {
-      const device = await store.getDevice(id);
-      if (!device || device.revoked || device.expiresAt <= now() || !/^[a-f\d]{64}$/.test(device.tokenDigest)
-        || !timingSafeEqual(Buffer.from(device.tokenDigest, "hex"), Buffer.from(hashFashionRadarSecret(secret), "hex"))) {
-        return reply(401, { error: "unauthorized" });
-      }
-      if (!device.active || !["admin", "member"].includes(device.role)) return reply(403, { error: "import_forbidden" });
-      if (!await store.takeRateSlot(id)) return reply(429, { error: "rate_limited" }, { "Retry-After": "60" });
+      const claim = await store.claim(id, digest);
+      if (claim.status === 401) return reply(401, { error: "unauthorized" });
+      if (claim.status === 403) return reply(403, { error: "import_forbidden" });
+      if (claim.status === 429) return reply(429, { error: "rate_limited" }, { "Retry-After": "60" });
+      if (claim.status !== 200) throw new Error("Invalid Fashion Radar claim.");
       if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json"
         || request.headers.has("content-encoding")) return reply(415, { error: "unsupported_media_type" });
       const body = await readBody(request);
@@ -79,12 +70,13 @@ export function createFashionRadarReceiver(options: { enabled?: boolean; store?:
       for (const [index, video] of batch.data.videos.entries()) {
         if (Object.keys(incoming[index]).some((field) => !Object.hasOwn(video, field))
           || Date.parse(video.fetchedAt) > now() + 5 * 60_000) return reply(422, { error: "invalid_batch" });
-        if (video.source !== fashionRadarSources[video.platform] || !device.platforms.includes(video.platform)) {
+        if (video.source !== fashionRadarSources[video.platform] || !claim.platforms.includes(video.platform)) {
           return reply(403, { error: "source_forbidden" });
         }
       }
-      const { sent, duplicates } = await store.save(id, batch.data);
-      return reply(200, { sent, rejected: 0, duplicates });
+      const result = await store.save(id, digest, batch.data);
+      if (!result) return reply(403, { error: "import_forbidden" });
+      return reply(200, { ...result, rejected: 0 });
     } catch {
       return reply(503, { error: "sync_unavailable" });
     }

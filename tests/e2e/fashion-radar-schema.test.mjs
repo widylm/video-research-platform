@@ -58,6 +58,9 @@ test("review SQL isolates credentials, gates snapshot reads and preserves newer 
   assert.throws(() => sql("set role anon; select * from public.fashion_radar_snapshots;"), /permission denied/);
   assert.throws(() => sql("set role authenticated; select secret_sha256 from private.fashion_radar_devices;"), /permission denied/);
   assert.throws(() => sql("set role service_role; update public.fashion_radar_snapshots set views = 99;"), /permission denied/);
+  assert.throws(() => sql("set role kadr_radar_ingest; select secret_sha256 from private.fashion_radar_devices;"), /permission denied/);
+  assert.throws(() => sql("set role kadr_radar_ingest; update public.videos set views = 99;"), /permission denied/);
+  assert.throws(() => sql("set role authenticated; select * from private.claim_fashion_radar_request(gen_random_uuid(), 'fake');"), /permission denied/);
   assert.throws(() => sql(`insert into public.fashion_radar_snapshots (platform, external_id, source, fetched_at, url)
     values ('instagram', 'Demo_Reel', 'mock:instagram', now(), 'https://www.instagram.com/reel/Demo_Reel/');`), /check constraint/);
 });

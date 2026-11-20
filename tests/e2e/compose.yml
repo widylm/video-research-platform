@@ -4,6 +4,7 @@ services:
     image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
     environment:
       POSTGRES_PASSWORD: ${KADR_TEST_DB_PASSWORD:?}
+    ports: ["127.0.0.1::5432"]
     healthcheck:
       test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres"]
       interval: 1s
