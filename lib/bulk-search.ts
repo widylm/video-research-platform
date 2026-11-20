@@ -8,17 +8,29 @@ export const bulkPageSize = 50;
 export const bulkPageLimit = 40;
 export const bulkPilotBudgetMicros = 0;
 
+const utcDate = z.iso.datetime({ offset: true }).transform((value) => new Date(value).toISOString());
+const nonnegativeInteger = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const bulkFiltersSchema = z.object({
+  publishedFrom: utcDate.optional(),
+  publishedTo: utcDate.optional(),
+  minViews: nonnegativeInteger.optional(),
+  minLikes: nonnegativeInteger.optional(),
+}).refine(({ publishedFrom, publishedTo }) => !publishedFrom || !publishedTo || publishedFrom <= publishedTo, {
+  path: ["publishedTo"],
+  message: "The end of the publication window must be on or after its start.",
+});
+
 export const bulkQuerySchema = z.object({
   keywords: z.string().trim().min(1).max(120),
   platform: z.enum(["all", ...bulkPlatforms]),
   limit: z.number().int().min(1).max(bulkResultLimit),
+  filters: bulkFiltersSchema.optional(),
 });
 export type BulkQuery = z.infer<typeof bulkQuerySchema>;
 
 const optional = <T extends z.ZodType>(schema: T) => schema.nullish().transform((value) => value ?? null);
 const optionalText = (max: number) => optional(z.string().trim().max(max).transform((value) => value || null));
-const count = optional(z.number().int().min(0).max(Number.MAX_SAFE_INTEGER));
-const utcDate = z.iso.datetime({ offset: true }).transform((value) => new Date(value).toISOString());
+const count = optional(nonnegativeInteger);
 const sourceId = z.string().min(1).max(64).regex(/^[a-z0-9:_-]+$/);
 const videoFields = z.object({
   externalId: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
@@ -33,7 +45,7 @@ const videoFields = z.object({
   hashtags: optional(z.array(z.string().trim().min(1).max(128)).max(100)),
 });
 
-type ProviderVideo = z.input<typeof videoFields>;
+export type ProviderVideo = z.input<typeof videoFields>;
 const resultSchema = videoFields.extend({
   platform: z.enum(bulkPlatforms),
   source: sourceId,
@@ -51,8 +63,19 @@ function normalizeVideo(row: z.output<typeof resultSchema>): BulkVideo | null {
   return { ...row, url };
 }
 
+export const bulkVideoSchema = resultSchema.transform(normalizeVideo).pipe(z.custom<BulkVideo>((value) => value !== null));
+
 export function bulkVideoKey(video: Pick<BulkVideo, "platform" | "externalId">) {
   return `${video.platform}:${video.externalId}`;
+}
+
+function matchesFilters(video: BulkVideo, filters: BulkQuery["filters"]) {
+  if (!filters) return true;
+  const { publishedFrom, publishedTo, minViews, minLikes } = filters;
+  return (publishedFrom === undefined || (video.publishedAt !== null && video.publishedAt >= publishedFrom))
+    && (publishedTo === undefined || (video.publishedAt !== null && video.publishedAt <= publishedTo))
+    && (minViews === undefined || (video.views !== null && video.views >= minViews))
+    && (minLikes === undefined || (video.likes !== null && video.likes >= minLikes));
 }
 
 export interface BulkSearchProvider {
@@ -67,7 +90,7 @@ export interface BulkSearchProvider {
   >;
 }
 
-const micros = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const micros = nonnegativeInteger;
 const pageSchema = z.object({
   items: z.array(z.unknown()).max(bulkPageSize),
   nextCursor: z.string().min(1).max(1_024).nullable(),
@@ -131,6 +154,7 @@ export async function searchBulk(
         rejected += 1;
         continue;
       }
+      if (!matchesFilters(video, query.filters)) continue;
 
       const key = bulkVideoKey(video);
       if (videos.has(key)) duplicates += 1;
@@ -154,6 +178,6 @@ export async function searchBulk(
 export const bulkStoredResultSchema = z.object({
   query: bulkQuerySchema,
   result: jobMetadata.extend({
-    videos: z.array(resultSchema.transform(normalizeVideo).pipe(z.custom<BulkVideo>((value) => value !== null))).max(bulkResultLimit),
+    videos: z.array(bulkVideoSchema).max(bulkResultLimit),
   }),
 });
