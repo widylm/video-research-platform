@@ -1,4 +1,4 @@
-import { cloudBrowserBinding, cloudBrowserSocialPlatform, cloudEnsembleEnabled } from "@/lib/cloud-browser-binding";
+import { cloudBrowserBinding, cloudBrowserSocialPlatform, cloudTiktokSearchEnabled } from "@/lib/cloud-browser-binding";
 import { cloudBrowserRequest, type CloudBrowserErrorCode } from "@/lib/cloud-browser-contract";
 import { workspace } from "@/lib/workspace";
 
@@ -48,7 +48,7 @@ async function run(request: Request) {
       if ("mode" in query.data && query.data.mode === "social" && query.data.platform !== cloudBrowserSocialPlatform()) {
         return response("social_disabled", 503);
       }
-      if ("mode" in query.data && query.data.mode === "provider" && !cloudEnsembleEnabled()) {
+      if ("mode" in query.data && query.data.mode === "provider" && !cloudTiktokSearchEnabled()) {
         return response("provider_disabled", 503);
       }
       init.body = JSON.stringify(query.data);

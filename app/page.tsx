@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { Dashboard } from "@/components/dashboard";
-import { cloudBrowserBinding, cloudBrowserSocialPlatform, cloudEnsembleEnabled } from "@/lib/cloud-browser-binding";
+import { cloudBrowserBinding, cloudBrowserSocialPlatform, cloudTiktokSearchEnabled } from "@/lib/cloud-browser-binding";
 import { emptyLibrary } from "@/lib/library";
 import { searchVideos } from "@/lib/providers";
 import { defaultSearch } from "@/lib/videos";
@@ -23,6 +23,6 @@ export default async function Home() {
     profile={session.mode === "team" ? session.profile : null}
     cloudBrowserSearch={session.mode === "team" && session.profile.role !== "viewer" && !!cloudBrowserBinding()}
     cloudBrowserPlatform={cloudBrowserSocialPlatform()}
-    ensembleSearch={cloudEnsembleEnabled()}
+    tiktokSearch={cloudTiktokSearchEnabled()}
   />;
 }

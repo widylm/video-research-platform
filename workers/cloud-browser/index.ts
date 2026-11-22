@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { cloudBrowserRequest, socialPilotPlatform, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
-import { fetchEnsembleKeyword, EnsemblePilotError } from "./ensembledata.ts";
+import { searchIndexedTiktok } from "./tiktok-search.ts";
 import { discoveryUrl, runSocialDiscovery } from "./video-discovery.ts";
 import { storeObservations } from "./catalog.ts";
 import { browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
@@ -22,8 +22,8 @@ interface Env {
   KADR_BROWSER_SOURCE?: string;
   KADR_ENABLE_SOCIAL_DISCOVERY?: string;
   KADR_SOCIAL_DISCOVERY_PLATFORM?: string;
-  KADR_ENABLE_ENSEMBLEDATA?: string;
-  ENSEMBLEDATA_TOKEN?: string;
+  KADR_ENABLE_TIKTOK_SEARCH?: string;
+  TAVILY_API_KEY?: string;
   KADR_BROWSER_SOURCE_URL?: string;
   CLOUD_BROWSER_JOBS: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
 }
@@ -33,7 +33,7 @@ const slot = "active";
 const lastStart = "last-start";
 const budgetKey = "budget";
 const socialAttempt = "social-attempt-used";
-const providerAttempt = "provider-attempt-used";
+const providerAttempt = "tiktok-search-attempt-used";
 const reservationMs = 60_000;
 const maxReservedMs = 8 * reservationMs;
 const maxRuns = 8;
@@ -70,7 +70,8 @@ export class CloudBrowserJobs {
     const query = cloudBrowserRequest.safeParse(await request.json().catch(() => null));
     if (!query.success) return json({ error: "invalid_query" }, 400);
     const provider = "mode" in query.data && query.data.mode === "provider";
-    if (provider && (this.env.KADR_ENABLE_ENSEMBLEDATA !== "1" || !this.env.ENSEMBLEDATA_TOKEN)) return json({ error: "provider_disabled" }, 503);
+    if (provider && (this.env.KADR_ENABLE_TIKTOK_SEARCH !== "1" || !this.env.TAVILY_API_KEY?.trim())) return json({ error: "provider_disabled" }, 503);
+    if (!provider && this.env.KADR_ENABLE_TIKTOK_SEARCH === "1") return json({ error: "invalid_query" }, 400);
     if (!provider && !this.env.BROWSER) return json({ error: "source_unavailable" }, 503);
     const social = "mode" in query.data && query.data.mode === "social";
     const allowedPlatform = socialPilotPlatform(this.env);
@@ -150,9 +151,9 @@ export class CloudBrowserJobs {
     let result: StoredJob;
     try {
       if (running.mode === "provider") {
-        if (this.env.KADR_ENABLE_ENSEMBLEDATA !== "1" || !this.env.ENSEMBLEDATA_TOKEN) result = { ...running, state: "failed", error: "provider_disabled" };
+        if (this.env.KADR_ENABLE_TIKTOK_SEARCH !== "1" || !this.env.TAVILY_API_KEY?.trim()) result = { ...running, state: "failed", error: "provider_disabled" };
         else {
-          const videos = await fetchEnsembleKeyword(this.env.ENSEMBLEDATA_TOKEN, running.query.keywords);
+          const videos = await searchIndexedTiktok(this.env.TAVILY_API_KEY, running.query.keywords, running.query.limit);
           result = { ...running, state: "completed", records: [], videos };
         }
       } else if (!this.env.BROWSER) result = { ...running, state: "failed", error: "source_unavailable" };
@@ -169,7 +170,7 @@ export class CloudBrowserJobs {
         result = { ...running, state: "completed", records: [...records] };
       }
     } catch (error) {
-      result = { ...running, state: "failed", error: error instanceof EnsemblePilotError ? error.code : browserErrorCode(error) };
+      result = { ...running, state: "failed", error: browserErrorCode(error) };
     }
     await storage.transaction(async (transaction) => {
       if (await transaction.get<string>(slot) !== running.id) return;
@@ -183,7 +184,8 @@ export class CloudBrowserJobs {
 
 const worker = {
   fetch(request: Request, env: Env) {
-    const name = socialPilotPlatform(env) ? "social-pilot" : "workspace";
+    const name = env.KADR_ENABLE_TIKTOK_SEARCH === "1" ? "tiktok-web-search"
+      : socialPilotPlatform(env) ? "social-pilot" : "workspace";
     return env.CLOUD_BROWSER_JOBS.get(env.CLOUD_BROWSER_JOBS.idFromName(name)).fetch(request);
   },
 };

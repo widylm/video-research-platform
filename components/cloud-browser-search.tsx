@@ -5,10 +5,10 @@ import { Search } from "lucide-react";
 import { cloudBrowserErrors, cloudBrowserUrl, cloudSocialLimit, type CloudBrowserErrorCode, type CloudBrowserJob } from "@/lib/cloud-browser-contract";
 import type { BulkPlatform, BulkQuery } from "@/lib/bulk-search";
 
-const status = { pending: "В очереди", running: "Браузер выполняет поиск", completed: "Проверка завершена", failed: "Проверка не завершилась" };
+const status = { pending: "В очереди", running: "Выполняется поиск", completed: "Поиск завершён", failed: "Поиск не завершился" };
 const describe = (code?: CloudBrowserErrorCode) => (code && cloudBrowserErrors[code]) || cloudBrowserErrors.unavailable;
 
-export function CloudBrowserSearch({ socialPlatform, ensembleEnabled }: { socialPlatform?: BulkPlatform; ensembleEnabled?: boolean }) {
+export function CloudBrowserSearch({ socialPlatform, tiktokSearchEnabled }: { socialPlatform?: BulkPlatform; tiktokSearchEnabled?: boolean }) {
   const [job, setJob] = useState<CloudBrowserJob | null>(null);
   const [ready, setReady] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -47,13 +47,13 @@ export function CloudBrowserSearch({ socialPlatform, ensembleEnabled }: { social
     if (busy) return;
     const fields = new FormData(event.currentTarget);
     const query: BulkQuery = {
-      keywords: String(fields.get("keywords") ?? ""), platform: ensembleEnabled ? "tiktok" : socialPlatform ?? "all", limit: cloudSocialLimit,
+      keywords: String(fields.get("keywords") ?? ""), platform: tiktokSearchEnabled ? "tiktok" : socialPlatform ?? "all", limit: cloudSocialLimit,
     };
     setStarting(true);
     setError("");
     try {
       const response = await fetch(cloudBrowserUrl, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ensembleEnabled ? { ...query, mode: "provider" } : socialPlatform ? { ...query, mode: "social" } : query),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(tiktokSearchEnabled ? { ...query, mode: "provider" } : socialPlatform ? { ...query, mode: "social" } : query),
       });
       const data = await response.json();
       if (response.ok) setJob(data.job);
@@ -64,9 +64,9 @@ export function CloudBrowserSearch({ socialPlatform, ensembleEnabled }: { social
 
   return <>
     <form className="panel pilot-form" onSubmit={submit}>
-      <label>{socialPlatform === "instagram" && !ensembleEnabled ? "Хэштег" : "Ключевые слова"}<input name="keywords" required maxLength={120} disabled={busy} /></label>
+      <label>{socialPlatform === "instagram" && !tiktokSearchEnabled ? "Хэштег" : "Ключевые слова"}<input name="keywords" required maxLength={120} disabled={busy} /></label>
       <div className="pilot-actions">
-        <span>{ensembleEnabled ? "TikTok · поиск по ключевому слову · один пробный запрос через EnsembleData" : socialPlatform ? `Один пробный запуск · ${socialPlatform === "tiktok" ? "TikTok" : "Instagram"}` : "Разрешённая тестовая страница · отдельный каталог документов"}</span>
+        <span>{tiktokSearchEnabled ? "TikTok · ссылки из веб-поиска · до 10 видео" : socialPlatform ? `Один пробный запуск · ${socialPlatform === "tiktok" ? "TikTok" : "Instagram"}` : "Разрешённая тестовая страница · отдельный каталог документов"}</span>
         <button className="button primary" disabled={busy} type="submit"><Search size={16} /> Найти</button>
       </div>
     </form>

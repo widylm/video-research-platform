@@ -20,8 +20,8 @@ export function cloudBrowserSocialPlatform() {
   }
 }
 
-export function cloudEnsembleEnabled(): boolean {
+export function cloudTiktokSearchEnabled(): boolean {
   try {
-    return (getCloudflareContext().env as { KADR_ENABLE_ENSEMBLEDATA?: string }).KADR_ENABLE_ENSEMBLEDATA === "1";
+    return (getCloudflareContext().env as { KADR_ENABLE_TIKTOK_SEARCH?: string }).KADR_ENABLE_TIKTOK_SEARCH === "1";
   } catch { return false; }
 }
