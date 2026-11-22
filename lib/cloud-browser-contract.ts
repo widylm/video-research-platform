@@ -1,8 +1,13 @@
+import { z } from "zod";
 import { bulkQuerySchema, type BulkVideo } from "./bulk-search.ts";
 
 export const cloudBrowserUrl = "/api/cloud-browser";
 export const cloudBrowserQuery = bulkQuerySchema.strict().refine(({ platform, filters, limit }) =>
   platform === "all" && filters === undefined && limit <= 10);
+
+export const cloudSocialQuery = bulkQuerySchema.extend({ mode: z.literal("social") }).strict().refine(({ limit, filters }) => limit <= 20 && filters === undefined);
+export const cloudBrowserRequest = cloudBrowserQuery.or(cloudSocialQuery);
+
 
 export interface CloudBrowserRecord {
   id: string;
@@ -32,6 +37,7 @@ export const cloudBrowserErrors = {
   manual_intervention_required: "Источник требует ручной проверки. Поиск остановлен.",
   timed_out: "Облачный браузер не успел завершить поиск.",
   interrupted: "Выполнение было прервано. Запустите поиск снова.",
+  social_disabled: "Поиск публичных видео пока не включён в этом окружении.",
 } as const;
 export type CloudBrowserErrorCode = keyof typeof cloudBrowserErrors;
 
@@ -40,5 +46,8 @@ export interface CloudBrowserJob {
   state: "pending" | "running" | "completed" | "failed";
   keywords: string;
   records: CloudBrowserRecord[];
+  videos?: BulkVideo[];
+  unavailablePlatforms?: ("tiktok" | "instagram")[];
+  mode?: "neutral" | "social";
   error?: CloudBrowserErrorCode;
 }
