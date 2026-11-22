@@ -19,3 +19,9 @@ export function cloudBrowserSocialPlatform() {
     return undefined;
   }
 }
+
+export function cloudEnsembleEnabled(): boolean {
+  try {
+    return (getCloudflareContext().env as { KADR_ENABLE_ENSEMBLEDATA?: string }).KADR_ENABLE_ENSEMBLEDATA === "1";
+  } catch { return false; }
+}
