@@ -8,7 +8,9 @@ export const cloudBrowserQuery = bulkQuerySchema.strict().refine(({ platform, fi
 export const cloudSocialLimit = 10;
 export const cloudSocialQuery = bulkQuerySchema.extend({ mode: z.literal("social"), platform: z.enum(bulkPlatforms) })
   .strict().refine(({ limit, filters }) => limit <= cloudSocialLimit && filters === undefined);
-export const cloudBrowserRequest = cloudBrowserQuery.or(cloudSocialQuery);
+export const cloudProviderQuery = bulkQuerySchema.extend({ mode: z.literal("provider"), platform: z.literal("tiktok") })
+  .strict().refine(({ limit, filters }) => limit <= 10 && filters === undefined);
+export const cloudBrowserRequest = z.union([cloudBrowserQuery, cloudSocialQuery, cloudProviderQuery]);
 
 export function socialPilotPlatform(env: { KADR_ENABLE_SOCIAL_DISCOVERY?: string; KADR_SOCIAL_DISCOVERY_PLATFORM?: string }): BulkPlatform | undefined {
   const platform = env.KADR_SOCIAL_DISCOVERY_PLATFORM;
@@ -50,6 +52,11 @@ export const cloudBrowserErrors = {
   source_http_429: "Площадка вернула HTTP 429. Достигнут лимит запросов.",
   source_http_451: "Площадка вернула HTTP 451. Доступ ограничен по правовым причинам.",
   source_login_required: "Площадка перенаправила на вход или потребовала войти.",
+  provider_disabled: "Поиск через поставщика пока не настроен.",
+  provider_http_error: "Поставщик данных отклонил запрос. Проверьте доступ и квоту.",
+  provider_invalid_response: "Поставщик вернул неожиданный формат данных.",
+  provider_timeout: "Поставщик данных не ответил вовремя.",
+  provider_already_run: "Один бесплатный пробный запуск уже использован.",
 } as const;
 export type CloudBrowserErrorCode = keyof typeof cloudBrowserErrors;
 
@@ -59,6 +66,6 @@ export interface CloudBrowserJob {
   keywords: string;
   records: CloudBrowserRecord[];
   videos?: BulkVideo[];
-  mode?: "neutral" | "social";
+  mode?: "neutral" | "social" | "provider";
   error?: CloudBrowserErrorCode;
 }
