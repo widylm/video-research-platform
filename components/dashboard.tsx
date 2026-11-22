@@ -13,6 +13,7 @@ import { AddVideoDialog } from "./add-video-dialog";
 import { Brand } from "./brand";
 import { BulkSearchPilot } from "./bulk-search-pilot";
 import { CloudBrowserSearch } from "./cloud-browser-search";
+import { InstagramDiscovery } from "./instagram-discovery";
 import { Collections } from "./collections";
 import { SearchForm } from "./search-form";
 import { VideoDialog } from "./video-dialog";
@@ -60,11 +61,12 @@ function changeDemoLibrary(library: Library, command: LibraryCommand): Library {
   }
 }
 
-export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowserSearch }: {
+export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowserSearch, instagramDiscovery }: {
   initialVideos: Video[];
   initialLibrary: Library;
   profile: Profile | null;
   cloudBrowserSearch?: boolean;
+  instagramDiscovery?: boolean;
 }) {
   const [section, setSection] = useState<Section>("search");
   const [draft, setDraft] = useState(defaultSearch);
@@ -180,13 +182,15 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
       }),
     librarySort,
   );
-  const title = activeCollection?.name ?? sections[section].label;
+  const pilotLabel = instagramDiscovery ? "Поиск в Instagram" : sections.pilot.label;
+  const title = activeCollection?.name ?? (section === "pilot" ? pilotLabel : sections[section].label);
 
   return <div className="app-shell">
     <aside className="sidebar">
       <Brand />
       <nav aria-label="Разделы" className="main-nav">
-        {Object.entries(sections).map(([key, { label, icon: Icon }]) => {
+        {Object.entries(sections).map(([key, { label: sectionLabel, icon: Icon }]) => {
+          const label = key === "pilot" ? pilotLabel : sectionLabel;
           const destination = key as Section;
           const count = key === "favorites" ? library.favorites.length : undefined;
           return <button className="nav-entry" key={key} aria-current={section === key ? "page" : undefined}
@@ -210,7 +214,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
 
     <div className="workspace">
       <header className="workspace-bar">
-        <div className="breadcrumbs"><span>Рабочее пространство</span><ChevronRight size={15} /><strong>{sections[section].label}</strong></div>
+        <div className="breadcrumbs"><span>Рабочее пространство</span><ChevronRight size={15} /><strong>{section === "pilot" ? pilotLabel : sections[section].label}</strong></div>
         <span className="mode-badge">{profile ? <Users size={15} /> : <FlaskConical size={15} />}
           {profile ? "Командный доступ" : "Демо-режим"}
         </span>
@@ -223,6 +227,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
             <h1>{title}</h1>
             <p>{activeCollection ? (activeCollection.shared ? "Коллекция для команды" : "Личная коллекция")
               : section === "search" && profile ? "Ищите видео, сохранённые в каталоге команды."
+                : section === "pilot" && instagramDiscovery ? "Поиск Reels по хэштегу среди выбранных Instagram-аккаунтов."
                 : section === "pilot" && cloudBrowserSearch ? "Проверьте облачный поиск на разрешённом тестовом источнике."
                   : sections[section].subtitle}</p>
           </div>
@@ -238,7 +243,8 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
           }}
         />}
 
-        {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch />
+        {section === "pilot" && (instagramDiscovery && profile ? <InstagramDiscovery profileId={profile.id} />
+          : cloudBrowserSearch ? <CloudBrowserSearch />
           : <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />)}
 
         {section === "collections" && <Collections

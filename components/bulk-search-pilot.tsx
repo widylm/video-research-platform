@@ -7,6 +7,7 @@ import {
   type BulkQuery, type BulkSearchResult, type BulkVideo,
 } from "@/lib/bulk-search";
 import { runBulkPilot } from "@/lib/providers/bulk-pilot";
+import { officialEmbed } from "@/lib/videos";
 import { PlatformBadge } from "./video-results";
 
 const defaultQuery: BulkQuery = { keywords: "", platform: "all", limit: 100 };
@@ -57,7 +58,9 @@ function PilotNote({ storageKey }: { storageKey: string }) {
   </details>;
 }
 
-function PilotCard({ video, storageScope }: { video: BulkVideo; storageScope: string }) {
+export function PilotCard({ video, storageScope, preview }: { video: BulkVideo; storageScope: string; preview?: boolean }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const embed = preview ? officialEmbed({ platform: video.platform, url: video.url, isMock: false }) : null;
   return <article className="panel pilot-card">
     <PlatformBadge platform={video.platform} />
     <h3>{video.originalTitle ?? "Название недоступно"}</h3>
@@ -73,6 +76,12 @@ function PilotCard({ video, storageScope }: { video: BulkVideo; storageScope: st
         return <div key={key}><dt>{label}</dt><dd>{count === null ? noData : number.format(count)}</dd></div>;
       })}
     </dl>
+    {embed && <>
+      <button className="button secondary" type="button" aria-expanded={previewOpen}
+        onClick={() => setPreviewOpen(!previewOpen)}>{previewOpen ? "Скрыть видео" : "Смотреть здесь"}</button>
+      {previewOpen && <iframe className="official-embed" src={embed} title="Instagram Reel" allowFullScreen
+        referrerPolicy="strict-origin-when-cross-origin" />}
+    </>}
     <details>
       <summary>Источник и ссылка</summary>
       <dl className="pilot-metadata">
