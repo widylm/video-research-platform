@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { Dashboard } from "@/components/dashboard";
 import { cloudBrowserBinding } from "@/lib/cloud-browser-binding";
+import { instagramDiscoveryConfig } from "@/lib/instagram-discovery";
 import { emptyLibrary } from "@/lib/library";
 import { searchVideos } from "@/lib/providers";
 import { defaultSearch } from "@/lib/videos";
@@ -21,6 +22,7 @@ export default async function Home() {
     initialVideos={videos}
     initialLibrary={library}
     profile={session.mode === "team" ? session.profile : null}
+    instagramDiscovery={session.mode === "team" && session.profile.role !== "viewer" && !!instagramDiscoveryConfig(process.env)}
     cloudBrowserSearch={session.mode === "team" && session.profile.role !== "viewer" && !!cloudBrowserBinding()}
   />;
 }
