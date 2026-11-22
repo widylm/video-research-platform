@@ -1,5 +1,5 @@
 import { cloudBrowserBinding } from "@/lib/cloud-browser-binding";
-import { cloudBrowserQuery, type CloudBrowserErrorCode } from "@/lib/cloud-browser-contract";
+import { cloudBrowserRequest, type CloudBrowserErrorCode } from "@/lib/cloud-browser-contract";
 import { workspace } from "@/lib/workspace";
 
 const response = (error: CloudBrowserErrorCode, status: number) =>
@@ -43,7 +43,7 @@ async function run(request: Request) {
     const init: RequestInit = { method: request.method, headers };
     if (request.method === "POST") {
       if (request.headers.get("content-type")?.split(";")[0] !== "application/json") return response("invalid_query", 415);
-      const query = cloudBrowserQuery.safeParse(await readSmallJson(request));
+      const query = cloudBrowserRequest.safeParse(await readSmallJson(request));
       if (!query.success) return response("invalid_query", 400);
       init.body = JSON.stringify(query.data);
     }
