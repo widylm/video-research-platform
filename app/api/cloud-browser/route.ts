@@ -1,4 +1,4 @@
-import { cloudBrowserBinding, cloudBrowserSocialPlatform } from "@/lib/cloud-browser-binding";
+import { cloudBrowserBinding, cloudBrowserSocialPlatform, cloudEnsembleEnabled } from "@/lib/cloud-browser-binding";
 import { cloudBrowserRequest, type CloudBrowserErrorCode } from "@/lib/cloud-browser-contract";
 import { workspace } from "@/lib/workspace";
 
@@ -47,6 +47,9 @@ async function run(request: Request) {
       if (!query.success) return response("invalid_query", 400);
       if ("mode" in query.data && query.data.mode === "social" && query.data.platform !== cloudBrowserSocialPlatform()) {
         return response("social_disabled", 503);
+      }
+      if ("mode" in query.data && query.data.mode === "provider" && !cloudEnsembleEnabled()) {
+        return response("provider_disabled", 503);
       }
       init.body = JSON.stringify(query.data);
     }
