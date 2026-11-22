@@ -60,13 +60,12 @@ function changeDemoLibrary(library: Library, command: LibraryCommand): Library {
   }
 }
 
-export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowserSearch, cloudBrowserPlatform, tiktokSearch }: {
+export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowserSearch, cloudBrowserPlatform }: {
   initialVideos: Video[];
   initialLibrary: Library;
   profile: Profile | null;
   cloudBrowserSearch?: boolean;
   cloudBrowserPlatform?: "tiktok" | "instagram";
-  tiktokSearch?: boolean;
 }) {
   const [section, setSection] = useState<Section>("search");
   const [draft, setDraft] = useState(defaultSearch);
@@ -240,7 +239,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
           }}
         />}
 
-        {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch socialPlatform={cloudBrowserPlatform} tiktokSearchEnabled={tiktokSearch} />
+        {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch socialPlatform={cloudBrowserPlatform} />
           : <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />)}
 
         {section === "collections" && <Collections

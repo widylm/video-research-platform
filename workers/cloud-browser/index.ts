@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { cloudBrowserRequest, socialPilotPlatform, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
-import { searchIndexedTiktok } from "./tiktok-search.ts";
 import { discoveryUrl, runSocialDiscovery } from "./video-discovery.ts";
 import { storeObservations } from "./catalog.ts";
 import { browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
@@ -22,8 +21,6 @@ interface Env {
   KADR_BROWSER_SOURCE?: string;
   KADR_ENABLE_SOCIAL_DISCOVERY?: string;
   KADR_SOCIAL_DISCOVERY_PLATFORM?: string;
-  KADR_ENABLE_TIKTOK_SEARCH?: string;
-  TAVILY_API_KEY?: string;
   KADR_BROWSER_SOURCE_URL?: string;
   CLOUD_BROWSER_JOBS: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
 }
@@ -33,7 +30,6 @@ const slot = "active";
 const lastStart = "last-start";
 const budgetKey = "budget";
 const socialAttempt = "social-attempt-used";
-const providerAttempt = "tiktok-search-attempt-used";
 const reservationMs = 60_000;
 const maxReservedMs = 8 * reservationMs;
 const maxRuns = 8;
@@ -69,17 +65,12 @@ export class CloudBrowserJobs {
     if (request.method !== "POST") return json({ error: "invalid_query" }, 405);
     const query = cloudBrowserRequest.safeParse(await request.json().catch(() => null));
     if (!query.success) return json({ error: "invalid_query" }, 400);
-    const provider = "mode" in query.data && query.data.mode === "provider";
-    if (provider && (this.env.KADR_ENABLE_TIKTOK_SEARCH !== "1" || !this.env.TAVILY_API_KEY?.trim())) return json({ error: "provider_disabled" }, 503);
-    if (!provider && this.env.KADR_ENABLE_TIKTOK_SEARCH === "1") return json({ error: "invalid_query" }, 400);
-    if (!provider && !this.env.BROWSER) return json({ error: "source_unavailable" }, 503);
+    if (!this.env.BROWSER) return json({ error: "source_unavailable" }, 503);
     const social = "mode" in query.data && query.data.mode === "social";
     const allowedPlatform = socialPilotPlatform(this.env);
     if (social) {
       if (allowedPlatform !== query.data.platform) return json({ error: "social_disabled" }, 503);
       if (!discoveryUrl(allowedPlatform, query.data.keywords)) return json({ error: "invalid_query" }, 400);
-    } else if (provider) {
-      // Independent provider mode; no browser launch required.
     } else if (allowedPlatform) {
       return json({ error: "invalid_query" }, 400);
     } else if (!neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL)) {
@@ -89,17 +80,15 @@ export class CloudBrowserJobs {
     return storage.transaction(async (transaction) => {
       if (await transaction.get(slot)) return json({ error: "slot_busy" }, 409);
       if (social && await transaction.get(socialAttempt)) return json({ error: "social_already_run" }, 429);
-      if (provider && await transaction.get(providerAttempt)) return json({ error: "provider_already_run" }, 429);
       const now = Date.now();
       const started = await transaction.get<number>(lastStart);
       if (started !== undefined && now - started < cooldownMs) return json({ error: "cooldown" }, 429);
-      const budget = provider ? (await transaction.get<Budget>(budgetKey) ?? { day: utcDay(now), requests: 0, reservedMs: 0 })
-        : reserveBudget(await transaction.get<Budget>(budgetKey), now);
+      const budget = reserveBudget(await transaction.get<Budget>(budgetKey), now);
       if (!budget) return json({ error: "budget_exhausted" }, 429);
       const id = crypto.randomUUID();
       const job: StoredJob = {
         id, state: "pending", keywords: query.data.keywords, records: [],
-        mode: provider ? "provider" : social ? "social" : "neutral",
+        mode: social ? "social" : "neutral",
         query: { keywords: query.data.keywords, platform: query.data.platform, limit: query.data.limit, filters: query.data.filters },
         reservationDay: budget.day,
       };
@@ -109,9 +98,8 @@ export class CloudBrowserJobs {
       await transaction.put(jobKey(id), job);
       await transaction.put(ownerKey, id);
       await transaction.put(slot, id);
-      if (!provider) await transaction.put(budgetKey, budget);
+      await transaction.put(budgetKey, budget);
       if (social) await transaction.put(socialAttempt, id);
-      if (provider) await transaction.put(providerAttempt, id);
       await transaction.setAlarm(now);
       return json({ job: publicJob(job) }, 202);
     });
@@ -130,7 +118,7 @@ export class CloudBrowserJobs {
         return null;
       }
       const now = Date.now();
-      if (job.mode !== "provider" && job.reservationDay !== utcDay(now)) {
+      if (job.reservationDay !== utcDay(now)) {
         const budget = reserveBudget(await transaction.get<Budget>(budgetKey), now);
         if (!budget) {
           await transaction.put(jobKey(id), { ...job, state: "failed", error: "budget_exhausted" });
@@ -150,13 +138,7 @@ export class CloudBrowserJobs {
     const url = neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL);
     let result: StoredJob;
     try {
-      if (running.mode === "provider") {
-        if (this.env.KADR_ENABLE_TIKTOK_SEARCH !== "1" || !this.env.TAVILY_API_KEY?.trim()) result = { ...running, state: "failed", error: "provider_disabled" };
-        else {
-          const videos = await searchIndexedTiktok(this.env.TAVILY_API_KEY, running.query.keywords, running.query.limit);
-          result = { ...running, state: "completed", records: [], videos };
-        }
-      } else if (!this.env.BROWSER) result = { ...running, state: "failed", error: "source_unavailable" };
+      if (!this.env.BROWSER) result = { ...running, state: "failed", error: "source_unavailable" };
       else if (running.mode === "social") {
         const platform = socialPilotPlatform(this.env);
         if (!platform || platform !== running.query.platform) result = { ...running, state: "failed", error: "social_disabled" };
@@ -184,8 +166,7 @@ export class CloudBrowserJobs {
 
 const worker = {
   fetch(request: Request, env: Env) {
-    const name = env.KADR_ENABLE_TIKTOK_SEARCH === "1" ? "tiktok-web-search"
-      : socialPilotPlatform(env) ? "social-pilot" : "workspace";
+    const name = socialPilotPlatform(env) ? "social-pilot" : "workspace";
     return env.CLOUD_BROWSER_JOBS.get(env.CLOUD_BROWSER_JOBS.idFromName(name)).fetch(request);
   },
 };
