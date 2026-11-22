@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { cloudBrowserQuery, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
+import { cloudBrowserRequest, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
+import { runSocialDiscovery } from "./video-discovery.ts";
 import { storeObservations } from "./catalog.ts";
 import { browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
 
@@ -18,6 +19,7 @@ interface State {
 interface Env {
   BROWSER?: BrowserBinding;
   KADR_BROWSER_SOURCE?: string;
+  KADR_ENABLE_SOCIAL_DISCOVERY?: string;
   KADR_BROWSER_SOURCE_URL?: string;
   CLOUD_BROWSER_JOBS: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
 }
@@ -33,7 +35,7 @@ const cooldownMs = 20_000;
 const jobKey = (id: string) => `job:${id}`;
 const userKey = (user: string) => `user:${user}`;
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const publicJob = ({ id, state, keywords, records, error }: StoredJob): CloudBrowserJob => ({ id, state, keywords, records, error });
+const publicJob = ({ id, state, keywords, records, videos, unavailablePlatforms, mode, error }: StoredJob): CloudBrowserJob => ({ id, state, keywords, records, videos, unavailablePlatforms, mode, error });
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 export function reserveBudget(previous: Budget | undefined, now: number): Budget | null {
@@ -59,11 +61,14 @@ export class CloudBrowserJobs {
       return json({ job: job ? publicJob(job) : null });
     }
     if (request.method !== "POST") return json({ error: "invalid_query" }, 405);
-    if (!this.env.BROWSER || !neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL)) {
+    const query = cloudBrowserRequest.safeParse(await request.json().catch(() => null));
+    if (!query.success) return json({ error: "invalid_query" }, 400);
+    if (!this.env.BROWSER) return json({ error: "source_unavailable" }, 503);
+    if ("mode" in query.data && query.data.mode === "social") {
+      if (this.env.KADR_ENABLE_SOCIAL_DISCOVERY !== "1") return json({ error: "social_disabled" }, 503);
+    } else if (!neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL)) {
       return json({ error: "source_unavailable" }, 503);
     }
-    const query = cloudBrowserQuery.safeParse(await request.json().catch(() => null));
-    if (!query.success) return json({ error: "invalid_query" }, 400);
 
     return storage.transaction(async (transaction) => {
       if (await transaction.get(slot)) return json({ error: "slot_busy" }, 409);
@@ -74,7 +79,10 @@ export class CloudBrowserJobs {
       if (!budget) return json({ error: "budget_exhausted" }, 429);
       const id = crypto.randomUUID();
       const job: StoredJob = {
-        id, state: "pending", keywords: query.data.keywords, records: [], query: query.data, reservationDay: budget.day,
+        id, state: "pending", keywords: query.data.keywords, records: [],
+        mode: "mode" in query.data && query.data.mode === "social" ? "social" : "neutral",
+        query: { keywords: query.data.keywords, platform: query.data.platform, limit: query.data.limit, filters: query.data.filters },
+        reservationDay: budget.day,
       };
       const ownerKey = userKey(user.data);
       const previous = await transaction.get<string>(ownerKey);
@@ -121,7 +129,14 @@ export class CloudBrowserJobs {
     const url = neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL);
     let result: StoredJob;
     try {
-      if (!this.env.BROWSER || !url) result = { ...running, state: "failed", error: "source_unavailable" };
+      if (!this.env.BROWSER) result = { ...running, state: "failed", error: "source_unavailable" };
+      else if (running.mode === "social") {
+        if (this.env.KADR_ENABLE_SOCIAL_DISCOVERY !== "1") result = { ...running, state: "failed", error: "social_disabled" };
+        else {
+          const discovery = await runSocialDiscovery(this.env.BROWSER, running.query, (promise) => this.state.waitUntil(promise));
+          result = { ...running, state: "completed", records: [], videos: discovery.videos, unavailablePlatforms: discovery.unavailablePlatforms };
+        }
+      } else if (!url) result = { ...running, state: "failed", error: "source_unavailable" };
       else {
         const records = await runNeutralBrowser(this.env.BROWSER, url, running.query, (promise) => this.state.waitUntil(promise));
         result = { ...running, state: "completed", records: [...records] };
