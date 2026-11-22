@@ -9,6 +9,8 @@ const status = { pending: "В очереди", running: "Браузер выпо
 const describe = (code?: CloudBrowserErrorCode) => (code && cloudBrowserErrors[code]) || cloudBrowserErrors.unavailable;
 
 export function CloudBrowserSearch() {
+  const [mode, setMode] = useState<"social" | "neutral">("social");
+  const [platform, setPlatform] = useState<"all" | "tiktok" | "instagram">("all");
   const [job, setJob] = useState<CloudBrowserJob | null>(null);
   const [ready, setReady] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -46,12 +48,12 @@ export function CloudBrowserSearch() {
     event.preventDefault();
     if (busy) return;
     const fields = new FormData(event.currentTarget);
-    const query: BulkQuery = { keywords: String(fields.get("keywords") ?? ""), platform: "all", limit: 10 };
+    const query: BulkQuery = { keywords: String(fields.get("keywords") ?? ""), platform: mode === "neutral" ? "all" : platform, limit: 10 };
     setStarting(true);
     setError("");
     try {
       const response = await fetch(cloudBrowserUrl, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(query),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(mode === "social" ? { ...query, mode: "social" } : query),
       });
       const data = await response.json();
       if (response.ok) setJob(data.job);
@@ -62,17 +64,21 @@ export function CloudBrowserSearch() {
 
   return <>
     <form className="panel pilot-form" onSubmit={submit}>
+      <label>Режим поиска<select value={mode} onChange={(event) => setMode(event.target.value as "social" | "neutral")} disabled={busy}><option value="social">Публичные видео (экспериментально)</option><option value="neutral">Тестовый документ</option></select></label>
+      {mode === "social" && <label>Площадка<select value={platform} onChange={(event) => setPlatform(event.target.value as "all" | "tiktok" | "instagram")} disabled={busy}><option value="all">TikTok и Instagram</option><option value="tiktok">TikTok</option><option value="instagram">Instagram (хэштег)</option></select></label>}
       <label>Ключевые слова<input name="keywords" required maxLength={120} disabled={busy} /></label>
       <div className="pilot-actions">
-        <span>Разрешённая тестовая страница · отдельный каталог документов</span>
+        <span>{mode === "social" ? "Публичные ссылки без обхода входа и CAPTCHA; статистика не гарантирована" : "Разрешённая тестовая страница · отдельный каталог документов"}</span>
         <button className="button primary" disabled={busy} type="submit"><Search size={16} /> Найти</button>
       </div>
     </form>
     {error && <p className="notice error" role="alert">{error}</p>}
     {job && <section className="results-section" aria-label="Результаты облачной проверки">
-      <p role="status">{status[job.state]}{job.state === "completed" ? ` · Найдено: ${job.records.length}` : ""}</p>
+      <p role="status">{status[job.state]}{job.state === "completed" ? ` · Найдено: ${job.mode === "social" ? job.videos?.length ?? 0 : job.records.length}` : ""}</p>
       {job.error && <p className="notice error" role="alert">{describe(job.error)}</p>}
-      {job.state === "completed" && job.records.length === 0 && <p className="panel empty-state">По запросу ничего не найдено.</p>}
+      {job.state === "completed" && job.records.length === 0 && !job.videos?.length && <p className="panel empty-state">По запросу ничего не найдено. Платформа могла ограничить публичную выдачу.</p>}
+      {job.unavailablePlatforms?.length ? <p className="notice error">Недоступна выдача: {job.unavailablePlatforms.join(", ")}</p> : null}
+      {job.videos?.map((video) => <article className="panel pilot-card" key={`${video.platform}:${video.externalId}`}><h3>{video.platform === "tiktok" ? "TikTok" : "Instagram Reel"} · {video.author ? `@${video.author}` : video.externalId}</h3><p>Просмотры, лайки и дата: не подтверждены источником</p>{video.url && <a href={video.url} target="_blank" rel="noreferrer">Открыть оригинальное видео</a>}</article>)}
       {job.records.map((record) => <article className="panel pilot-card" key={record.id}>
         <h3>{record.title}</h3>
         {record.description && <p>{record.description}</p>}
