@@ -44,7 +44,7 @@ const field = (xml: string, tag: string) => {
       return Number.isInteger(value) && value > 0 && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff)
         ? String.fromCodePoint(value) : "";
     }
-    return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" } as Record<string, string>)[named.toLowerCase()] ?? match;
+    return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" } as Record<string, string>)[(named ?? "").toLowerCase()] ?? match;
   }).trim();
 };
 
