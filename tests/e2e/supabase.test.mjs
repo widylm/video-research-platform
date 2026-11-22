@@ -73,14 +73,14 @@ async function signedInAs(t, role, appUrl) {
 
 test("the authenticated Кадр UI runs a server-side Wrangler Browser Run session and shows a neutral document", { timeout: 120_000 }, async (t) => {
   let hits = 0;
-  let unexpected = 0;
+  const unexpected = [];
   let userAgent = "";
   const fixture = createServer((incoming, outgoing) => {
-    if (incoming.url !== "/catalog") { unexpected += 1; return outgoing.writeHead(404).end(); }
+    if (incoming.url !== "/catalog") { unexpected.push(incoming.url); return outgoing.writeHead(404).end(); }
     hits += 1;
     userAgent = incoming.headers["user-agent"] ?? "";
     setTimeout(() => outgoing.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(
-      '<!doctype html><title>Botanical collection</title><main><h1>Catalogue of mosses</h1><p>A neutral document about mosses.</p><img src="/unexpected.png"></main>',
+      '<!doctype html><title>Botanical collection</title><link rel="icon" href="data:,"><main><h1>Catalogue of mosses</h1><p>A neutral document about mosses.</p><img src="/unexpected.png"></main>',
     ), 1_300);
   });
   fixture.listen(0, "127.0.0.1");
@@ -115,7 +115,7 @@ test("the authenticated Кадр UI runs a server-side Wrangler Browser Run sess
   assert.equal(await results.getByRole("link").getAttribute("href"), source);
   assert.equal(hits, 1);
   assert.match(userAgent, /Chrome/);
-  assert.equal(unexpected, 0);
+  assert.deepEqual(unexpected, []);
   await editor.reload();
   await button(editor, "Массовый поиск").click();
   await results.getByRole("heading", { name: "Catalogue of mosses" }).waitFor();

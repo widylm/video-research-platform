@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { cloudBrowserQuery, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
+import { cloudBrowserRequest, socialPilotPlatform, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
+import { discoveryUrl, runSocialDiscovery } from "./video-discovery.ts";
 import { storeObservations } from "./catalog.ts";
 import { browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
 
@@ -18,6 +19,8 @@ interface State {
 interface Env {
   BROWSER?: BrowserBinding;
   KADR_BROWSER_SOURCE?: string;
+  KADR_ENABLE_SOCIAL_DISCOVERY?: string;
+  KADR_SOCIAL_DISCOVERY_PLATFORM?: string;
   KADR_BROWSER_SOURCE_URL?: string;
   CLOUD_BROWSER_JOBS: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
 }
@@ -26,6 +29,7 @@ type Budget = { day: string; requests: number; reservedMs: number };
 const slot = "active";
 const lastStart = "last-start";
 const budgetKey = "budget";
+const socialAttempt = "social-attempt-used";
 const reservationMs = 60_000;
 const maxReservedMs = 8 * reservationMs;
 const maxRuns = 8;
@@ -33,7 +37,7 @@ const cooldownMs = 20_000;
 const jobKey = (id: string) => `job:${id}`;
 const userKey = (user: string) => `user:${user}`;
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const publicJob = ({ id, state, keywords, records, error }: StoredJob): CloudBrowserJob => ({ id, state, keywords, records, error });
+const publicJob = ({ id, state, keywords, records, videos, mode, error }: StoredJob): CloudBrowserJob => ({ id, state, keywords, records, videos, mode, error });
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 export function reserveBudget(previous: Budget | undefined, now: number): Budget | null {
@@ -59,14 +63,23 @@ export class CloudBrowserJobs {
       return json({ job: job ? publicJob(job) : null });
     }
     if (request.method !== "POST") return json({ error: "invalid_query" }, 405);
-    if (!this.env.BROWSER || !neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL)) {
+    const query = cloudBrowserRequest.safeParse(await request.json().catch(() => null));
+    if (!query.success) return json({ error: "invalid_query" }, 400);
+    if (!this.env.BROWSER) return json({ error: "source_unavailable" }, 503);
+    const social = "mode" in query.data && query.data.mode === "social";
+    const allowedPlatform = socialPilotPlatform(this.env);
+    if (social) {
+      if (allowedPlatform !== query.data.platform) return json({ error: "social_disabled" }, 503);
+      if (!discoveryUrl(allowedPlatform, query.data.keywords)) return json({ error: "invalid_query" }, 400);
+    } else if (allowedPlatform) {
+      return json({ error: "invalid_query" }, 400);
+    } else if (!neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL)) {
       return json({ error: "source_unavailable" }, 503);
     }
-    const query = cloudBrowserQuery.safeParse(await request.json().catch(() => null));
-    if (!query.success) return json({ error: "invalid_query" }, 400);
 
     return storage.transaction(async (transaction) => {
       if (await transaction.get(slot)) return json({ error: "slot_busy" }, 409);
+      if (social && await transaction.get(socialAttempt)) return json({ error: "social_already_run" }, 429);
       const now = Date.now();
       const started = await transaction.get<number>(lastStart);
       if (started !== undefined && now - started < cooldownMs) return json({ error: "cooldown" }, 429);
@@ -74,7 +87,10 @@ export class CloudBrowserJobs {
       if (!budget) return json({ error: "budget_exhausted" }, 429);
       const id = crypto.randomUUID();
       const job: StoredJob = {
-        id, state: "pending", keywords: query.data.keywords, records: [], query: query.data, reservationDay: budget.day,
+        id, state: "pending", keywords: query.data.keywords, records: [],
+        mode: social ? "social" : "neutral",
+        query: { keywords: query.data.keywords, platform: query.data.platform, limit: query.data.limit, filters: query.data.filters },
+        reservationDay: budget.day,
       };
       const ownerKey = userKey(user.data);
       const previous = await transaction.get<string>(ownerKey);
@@ -83,6 +99,7 @@ export class CloudBrowserJobs {
       await transaction.put(ownerKey, id);
       await transaction.put(slot, id);
       await transaction.put(budgetKey, budget);
+      if (social) await transaction.put(socialAttempt, id);
       await transaction.setAlarm(now);
       return json({ job: publicJob(job) }, 202);
     });
@@ -121,7 +138,15 @@ export class CloudBrowserJobs {
     const url = neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL);
     let result: StoredJob;
     try {
-      if (!this.env.BROWSER || !url) result = { ...running, state: "failed", error: "source_unavailable" };
+      if (!this.env.BROWSER) result = { ...running, state: "failed", error: "source_unavailable" };
+      else if (running.mode === "social") {
+        const platform = socialPilotPlatform(this.env);
+        if (!platform || platform !== running.query.platform) result = { ...running, state: "failed", error: "social_disabled" };
+        else {
+          const videos = await runSocialDiscovery(this.env.BROWSER, platform, running.query, (promise) => this.state.waitUntil(promise));
+          result = { ...running, state: "completed", records: [], videos };
+        }
+      } else if (!url) result = { ...running, state: "failed", error: "source_unavailable" };
       else {
         const records = await runNeutralBrowser(this.env.BROWSER, url, running.query, (promise) => this.state.waitUntil(promise));
         result = { ...running, state: "completed", records: [...records] };
@@ -141,7 +166,8 @@ export class CloudBrowserJobs {
 
 const worker = {
   fetch(request: Request, env: Env) {
-    return env.CLOUD_BROWSER_JOBS.get(env.CLOUD_BROWSER_JOBS.idFromName("workspace")).fetch(request);
+    const name = socialPilotPlatform(env) ? "social-pilot" : "workspace";
+    return env.CLOUD_BROWSER_JOBS.get(env.CLOUD_BROWSER_JOBS.idFromName(name)).fetch(request);
   },
 };
 

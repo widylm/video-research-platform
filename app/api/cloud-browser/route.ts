@@ -1,5 +1,5 @@
-import { cloudBrowserBinding } from "@/lib/cloud-browser-binding";
-import { cloudBrowserQuery, type CloudBrowserErrorCode } from "@/lib/cloud-browser-contract";
+import { cloudBrowserBinding, cloudBrowserSocialPlatform } from "@/lib/cloud-browser-binding";
+import { cloudBrowserRequest, type CloudBrowserErrorCode } from "@/lib/cloud-browser-contract";
 import { workspace } from "@/lib/workspace";
 
 const response = (error: CloudBrowserErrorCode, status: number) =>
@@ -43,8 +43,11 @@ async function run(request: Request) {
     const init: RequestInit = { method: request.method, headers };
     if (request.method === "POST") {
       if (request.headers.get("content-type")?.split(";")[0] !== "application/json") return response("invalid_query", 415);
-      const query = cloudBrowserQuery.safeParse(await readSmallJson(request));
+      const query = cloudBrowserRequest.safeParse(await readSmallJson(request));
       if (!query.success) return response("invalid_query", 400);
+      if ("mode" in query.data && query.data.mode === "social" && query.data.platform !== cloudBrowserSocialPlatform()) {
+        return response("social_disabled", 503);
+      }
       init.body = JSON.stringify(query.data);
     }
     return await executor.fetch(new Request("https://kadr-executor.internal/jobs", init));
