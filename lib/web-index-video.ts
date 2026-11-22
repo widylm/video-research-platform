@@ -24,8 +24,10 @@ export interface WebIndexResult {
   source: "bing-rss";
 }
 export class WebIndexError extends Error {
-  constructor(readonly code: "index_unavailable" | "index_rate_limited" | "index_invalid_feed") {
+  readonly code: "index_unavailable" | "index_rate_limited" | "index_invalid_feed";
+  constructor(code: "index_unavailable" | "index_rate_limited" | "index_invalid_feed") {
     super(code);
+    this.code = code;
   }
 }
 
