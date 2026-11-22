@@ -9,7 +9,7 @@ export async function POST(request: Request) {
   const origin = request.headers.get("origin");
   const fetchSite = request.headers.get("sec-fetch-site");
   if ((fetchSite && fetchSite !== "same-origin" && fetchSite !== "none")
-    || (origin && origin !== new URL(request.url).origin)) return send({ error: "forbidden" }, 403);
+    || (origin && fetchSite !== "same-origin" && origin !== new URL(request.url).origin)) return send({ error: "forbidden" }, 403);
   if (request.headers.get("content-type")?.split(";")[0] !== "application/json") {
     return send({ error: "invalid_query" }, 415);
   }
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const result = await searchWebIndex(query.data);
     return send(result);
   } catch (error) {
-    if (error instanceof WebIndexError) return send({ error: error.code }, 503);
+    if (error instanceof WebIndexError) return send({ error: error.code, failures: error.failures }, 503);
     return send({ error: "index_unavailable" }, 503);
   }
 }

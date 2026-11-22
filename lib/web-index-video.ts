@@ -21,13 +21,21 @@ export interface IndexedVideo {
 export interface WebIndexResult {
   videos: IndexedVideo[];
   failedPlatforms: WebIndexPlatform[];
+  failures: WebIndexFailure[];
   source: "bing-rss";
 }
+type WebIndexErrorCode = "index_unavailable" | "index_rate_limited" | "index_invalid_feed" | "index_timeout";
+export type WebIndexFailure = { platform: WebIndexPlatform; code: WebIndexErrorCode; httpStatus?: number };
+
 export class WebIndexError extends Error {
-  readonly code: "index_unavailable" | "index_rate_limited" | "index_invalid_feed";
-  constructor(code: "index_unavailable" | "index_rate_limited" | "index_invalid_feed") {
+  readonly code: WebIndexErrorCode;
+  readonly httpStatus?: number;
+  readonly failures: WebIndexFailure[];
+  constructor(code: WebIndexErrorCode, httpStatus?: number, failures: WebIndexFailure[] = []) {
     super(code);
     this.code = code;
+    this.httpStatus = httpStatus;
+    this.failures = failures;
   }
 }
 
@@ -89,28 +97,33 @@ async function searchOne(
   limit: number,
   request: typeof fetch,
 ): Promise<IndexedVideo[]> {
+  const signal = AbortSignal.timeout(8_000);
   let response: Response;
   try {
     response = await request(buildIndexUrl(platform, keywords), {
       method: "GET",
-      redirect: "error",
+      redirect: "manual",
       cache: "no-store",
       headers: { Accept: "application/rss+xml, application/xml;q=0.9" },
-      signal: AbortSignal.timeout(8_000),
+      signal,
     });
   } catch {
-    throw new WebIndexError("index_unavailable");
+    throw new WebIndexError(signal.aborted ? "index_timeout" : "index_unavailable");
   }
   if (response.status === 429) {
-    await response.body?.cancel();
-    throw new WebIndexError("index_rate_limited");
+    void response.body?.cancel().catch(() => {});
+    throw new WebIndexError("index_rate_limited", response.status);
   }
   if (!response.ok || Number(response.headers.get("content-length") ?? "0") > 400_000) {
-    await response.body?.cancel();
-    throw new WebIndexError("index_unavailable");
+    void response.body?.cancel().catch(() => {});
+    throw new WebIndexError(response.ok ? "index_invalid_feed" : "index_unavailable", response.status);
   }
-  const rss = await response.text();
-  return parseIndexedVideos(rss, platform, limit);
+  try {
+    return parseIndexedVideos(await response.text(), platform, limit);
+  } catch (error) {
+    throw new WebIndexError(error instanceof WebIndexError ? error.code
+      : signal.aborted ? "index_timeout" : "index_unavailable", response.status);
+  }
 }
 
 export async function searchWebIndex(
@@ -122,24 +135,24 @@ export async function searchWebIndex(
     ? ["tiktok", "instagram"] : [query.platform];
   const outcomes = await Promise.allSettled(platforms.map(platform =>
     searchOne(platform, query.keywords, query.limit, request)));
-  const failedPlatforms: WebIndexPlatform[] = [];
+  const failures: WebIndexFailure[] = [];
   const videos = new Map<string, IndexedVideo>();
   outcomes.forEach((outcome, index) => {
     if (outcome.status === "rejected") {
-      failedPlatforms.push(platforms[index]);
+      const error = outcome.reason instanceof WebIndexError ? outcome.reason : new WebIndexError("index_unavailable");
+      failures.push({ platform: platforms[index], code: error.code, httpStatus: error.httpStatus });
       return;
     }
     for (const video of outcome.value) videos.set(`${video.platform}:${video.externalId}`, video);
   });
-  if (failedPlatforms.length === platforms.length) {
-    const errors = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
-    const code = errors.some(outcome => outcome.reason instanceof WebIndexError
-      && outcome.reason.code === "index_rate_limited") ? "index_rate_limited" : "index_unavailable";
-    throw new WebIndexError(code);
+  if (failures.length === platforms.length) {
+    const code = failures.find(failure => failure.code === "index_rate_limited")?.code ?? failures[0].code;
+    throw new WebIndexError(code, undefined, failures);
   }
   return {
     videos: [...videos.values()].slice(0, query.limit),
-    failedPlatforms,
+    failedPlatforms: failures.map(failure => failure.platform),
+    failures,
     source: "bing-rss",
   };
 }

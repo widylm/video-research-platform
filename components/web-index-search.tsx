@@ -2,20 +2,24 @@
 import { useState, type FormEvent } from "react";
 import { Search } from "lucide-react";
 import { savePublicVideo } from "@/app/actions";
-import type { IndexedVideo, WebIndexPlatform } from "@/lib/web-index-video";
+import type { IndexedVideo, WebIndexFailure, WebIndexPlatform, WebIndexResult } from "@/lib/web-index-video";
 
 type Platform = "all" | WebIndexPlatform;
-type SearchResult = { videos: IndexedVideo[]; failedPlatforms: WebIndexPlatform[]; source: "bing-rss" };
 const errors: Record<string, string> = {
   forbidden: "Войдите в аккаунт команды для поиска.",
   invalid_query: "Введите запрос длиной от 2 до 120 символов.",
   index_unavailable: "Веб-индекс сейчас недоступен из облака. Попробуйте позже.",
   index_rate_limited: "Веб-индекс ограничил запросы. Попробуйте позже.",
+  index_invalid_feed: "Bing вернул ответ в неожиданном формате.",
+  index_timeout: "Bing не ответил вовремя.",
 };
+const describeFailures = (failures: WebIndexFailure[] = []) => failures
+  .map(failure => `${failure.platform === "tiktok" ? "TikTok" : "Instagram"} · ${failure.httpStatus ? `HTTP ${failure.httpStatus} · ` : ""}${failure.code}`)
+  .join(" / ");
 export function WebIndexSearch({ canSave }: { canSave: boolean }) {
   const [keywords, setKeywords] = useState("");
   const [platform, setPlatform] = useState<Platform>("all");
-  const [result, setResult] = useState<SearchResult | null>(null);
+  const [result, setResult] = useState<WebIndexResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState<string | null>(null);
@@ -33,8 +37,11 @@ export function WebIndexSearch({ canSave }: { canSave: boolean }) {
         body: JSON.stringify({ keywords, platform, limit: 20 }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(errors[body.error] ?? errors.index_unavailable);
-      setResult(body as SearchResult);
+      if (!response.ok) {
+        const details = describeFailures(body.failures);
+        throw new Error([errors[body.error] ?? errors.index_unavailable, details].filter(Boolean).join(" "));
+      }
+      setResult(body as WebIndexResult);
     } catch (error) {
       setError(error instanceof Error ? error.message : errors.index_unavailable);
     } finally { setLoading(false); }
@@ -80,7 +87,7 @@ export function WebIndexSearch({ canSave }: { canSave: boolean }) {
     {error && <p className="notice error" role="alert">{error}</p>}
     {result && <div>
       <p role="status">Найдено ссылок: {result.videos.length}. Наличие ролика и актуальность данных проверяйте на сайте площадки.</p>
-      {result.failedPlatforms.length > 0 && <p className="notice error">Не ответил веб-индекс для: {result.failedPlatforms.join(", ")}</p>}
+      {result.failures.length > 0 && <p className="notice error">{describeFailures(result.failures)}</p>}
       {result.videos.length === 0 && <p className="panel empty-state">Веб-индекс не нашёл подходящих ссылок. Это не означает, что видео на площадке нет.</p>}
       {result.videos.map(video => <article className="panel pilot-card" key={video.platform + video.externalId}>
         <h3>{video.indexTitle || (video.platform === "tiktok" ? "Видео TikTok" : "Instagram Reel")}</h3>

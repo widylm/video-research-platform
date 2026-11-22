@@ -42,9 +42,15 @@ test("partial index failure is reported; total failures reject", async () => {
     : new Response(rss([{ url: tiktok }]), { status: 200 });
   const partial = await searchWebIndex({ keywords: "coffee", platform: "all", limit: 10 }, mock);
   assert.deepEqual(partial.failedPlatforms, ["instagram"]);
+  assert.deepEqual(partial.failures, [{ platform: "instagram", code: "index_rate_limited", httpStatus: 429 }]);
   assert.equal(partial.videos.length, 1);
   await assert.rejects(searchWebIndex({ keywords: "coffee", platform: "instagram", limit: 10 }, mock),
-    error => error instanceof WebIndexError && error.code === "index_rate_limited");
+    error => error instanceof WebIndexError && error.code === "index_rate_limited" && error.failures[0].httpStatus === 429);
   await assert.rejects(searchWebIndex({ keywords: "coffee", platform: "tiktok", limit: 10 }, async () => new Response("<html></html>")),
-    error => error instanceof WebIndexError && error.code === "index_unavailable");
+    error => error instanceof WebIndexError && error.code === "index_invalid_feed" && error.failures[0].httpStatus === 200);
+  await assert.rejects(searchWebIndex({ keywords: "coffee", platform: "all", limit: 10 }, async (url, options) => {
+    assert.equal(options.redirect, "manual");
+    return new Response(null, { status: new URL(url).searchParams.get("q").includes("instagram") ? 302 : 403 });
+  }), error => error instanceof WebIndexError && error.code === "index_unavailable"
+    && error.failures.map(failure => failure.httpStatus).join() === "403,302");
 });
