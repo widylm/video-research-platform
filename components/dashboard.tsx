@@ -17,6 +17,7 @@ import { Collections } from "./collections";
 import { SearchForm } from "./search-form";
 import { VideoDialog } from "./video-dialog";
 import { VideoResults } from "./video-results";
+import { WebIndexSearch } from "./web-index-search";
 
 const sections = {
   search: { label: "Поиск видео", icon: Search, subtitle: "Исследуйте демонстрационные карточки коротких видео для TikTok и Instagram." },
@@ -237,6 +238,8 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
             search(query === defaultSearch ? defaultSearch : { ...query, sort: applied.sort });
           }}
         />}
+
+        {section === "search" && profile && <WebIndexSearch />}
 
         {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch />
           : <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />)}
