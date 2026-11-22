@@ -239,7 +239,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
           }}
         />}
 
-        {section === "search" && profile && <WebIndexSearch />}
+        {section === "search" && profile && <WebIndexSearch canSave={canEdit} />}
 
         {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch />
           : <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />)}
