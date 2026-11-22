@@ -1,13 +1,13 @@
 import puppeteer, { type Browser, type Page } from "@cloudflare/puppeteer";
 import { bulkVideoSchema, type BulkPlatform, type BulkQuery, type BulkVideo } from "../../lib/bulk-search.ts";
+import { cloudSocialLimit, type CloudBrowserErrorCode } from "../../lib/cloud-browser-contract.ts";
 import { parseVideoLink } from "../../lib/public-video-url.ts";
-import { BrowserJobError, browserErrorCode, withDeadline, type BrowserBinding } from "./source.ts";
+import { BrowserJobError, withDeadline, type BrowserBinding } from "./source.ts";
 
 // A new, opt-in public-page collector. It uses visible page links only:
 // no private endpoints, cookies, logins, captcha solving, or invented metrics.
 const source = "public_dom_browser";
 const maxLinks = 2_000;
-const maxVideos = 20;
 type Platform = BulkPlatform;
 
 export function discoveryUrl(platform: Platform, keywords: string): string | null {
@@ -21,7 +21,7 @@ export function discoveryUrl(platform: Platform, keywords: string): string | nul
   return `https://www.instagram.com/explore/tags/${encodeURIComponent(term)}/`;
 }
 
-export function normalizePublicLinks(links: readonly string[], platform: Platform, limit = maxVideos): BulkVideo[] {
+export function normalizePublicLinks(links: readonly string[], platform: Platform, limit = cloudSocialLimit): BulkVideo[] {
   const output = new Map<string, BulkVideo>();
   const fetchedAt = new Date().toISOString();
   for (const href of links.slice(0, maxLinks)) {
@@ -37,54 +37,56 @@ export function normalizePublicLinks(links: readonly string[], platform: Platfor
       views: null, likes: null, comments: null, hashtags: null,
     });
     if (row.success) output.set(externalId, row.data);
-    if (output.size >= Math.min(maxVideos, Math.max(1, limit))) break;
+    if (output.size >= Math.min(cloudSocialLimit, Math.max(1, limit))) break;
   }
   return Array.from(output.values());
 }
 
-async function scan(page: Page, url: string, platform: Platform, limit: number): Promise<BulkVideo[]> {
-  await page.setRequestInterception(true);
-  page.on("request", (request) => {
-    // Media are unnecessary for discovery and consume browser time.
-    const skip = ["image", "media", "font"].includes(request.resourceType());
-    void (skip ? request.abort() : request.continue()).catch(() => {});
-  });
-  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 });
-  if (!response || !response.ok()) throw new BrowserJobError("source_denied");
-  const origin = new URL(url).origin;
-  if (new URL(page.url()).origin !== origin) throw new BrowserJobError("source_denied");
-
-  let seen: BulkVideo[] = [];
-  for (let step = 0; step < 3; step += 1) {
-    const state = await page.evaluate(() => ({
-      title: document.title,
-      text: (document.body?.innerText ?? "").slice(0, 700),
-      links: Array.from(document.querySelectorAll("a[href]"))
-        .slice(0, 2_000).map((node) => (node as HTMLAnchorElement).href),
-    }));
-    if (/captcha|verify you are human|security check/i.test(state.title + " " + state.text)) {
-      throw new BrowserJobError("manual_intervention_required");
-    }
-    if (/login required|log in to continue|sign in to continue/i.test(state.title)) {
-      throw new BrowserJobError("source_denied");
-    }
-    seen = normalizePublicLinks(state.links, platform, limit);
-    if (seen.length >= limit) break;
-    await page.evaluate(() => window.scrollTo(0, document.body?.scrollHeight ?? 0));
-    await new Promise((resolve) => setTimeout(resolve, 1_200));
-  }
-  return seen;
+export function socialHttpError(status: number): CloudBrowserErrorCode {
+  if (status === 401) return "source_http_401";
+  if (status === 403) return "source_http_403";
+  if (status === 429) return "source_http_429";
+  if (status === 451) return "source_http_451";
+  return "source_denied";
 }
 
-export interface DiscoveryResult {
-  videos: BulkVideo[];
-  unavailablePlatforms: Platform[];
+async function scan(page: Page, url: string, platform: Platform, limit: number): Promise<BulkVideo[]> {
+  const origin = new URL(url).origin;
+  await page.setRequestInterception(true);
+  page.on("request", (request) => {
+    // Keep the pilot on the configured public origin and avoid sending forms or downloading media.
+    const target = new URL(request.url());
+    const allowed = target.origin === origin && request.method() === "GET"
+      && !["image", "media", "font"].includes(request.resourceType());
+    void (allowed ? request.continue() : request.abort()).catch(() => {});
+  });
+  const response = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 });
+  if (!response) throw new BrowserJobError("source_denied");
+  if (!response.ok()) throw new BrowserJobError(socialHttpError(response.status()));
+  const landed = new URL(page.url());
+  if (landed.origin !== origin) throw new BrowserJobError("source_denied");
+  const state = await page.evaluate(() => ({
+    title: document.title,
+    text: (document.body?.innerText ?? "").slice(0, 700),
+    links: Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]")).slice(0, 2_000)
+      .filter((node) => node.getClientRects().length > 0).map((node) => node.href),
+  }));
+  const notice = `${state.title} ${state.text}`;
+  if (/captcha|verify you are human|security check/i.test(notice)) {
+    throw new BrowserJobError("manual_intervention_required");
+  }
+  if (/\/(?:login|sign-in)\/?$/i.test(landed.pathname) || /login required|log in to continue|sign in to continue/i.test(notice)) {
+    throw new BrowserJobError("source_login_required");
+  }
+  return normalizePublicLinks(state.links, platform, limit);
 }
 
 export async function runSocialDiscovery(
-  binding: BrowserBinding, query: BulkQuery,
+  binding: BrowserBinding, platform: Platform, query: BulkQuery,
   cleanup: (promise: Promise<unknown>) => void,
-): Promise<DiscoveryResult> {
+): Promise<BulkVideo[]> {
+  const url = discoveryUrl(platform, query.keywords);
+  if (!url) throw new BrowserJobError("invalid_query");
   let browser: Browser | undefined;
   let expired = false;
   const launch = puppeteer.launch(binding, { keep_alive: 30_000 });
@@ -94,36 +96,8 @@ export async function runSocialDiscovery(
       const session = await launch;
       if (expired) throw new BrowserJobError("timed_out");
       browser = session;
-      const platforms: Platform[] = query.platform === "all" ? ["tiktok", "instagram"] : [query.platform];
-      const videos = new Map<string, BulkVideo>();
-      const unavailablePlatforms: Platform[] = [];
-      let firstError: unknown;
-      for (const platform of platforms) {
-        const url = discoveryUrl(platform, query.keywords);
-        if (!url) {
-          unavailablePlatforms.push(platform);
-          continue;
-        }
-        const page = await session.newPage();
-        try {
-          const items = await scan(page, url, platform, query.limit);
-          for (const video of items) {
-            videos.set(`${video.platform}:${video.externalId}`, video);
-            if (videos.size >= query.limit) break;
-          }
-        } catch (error) {
-          unavailablePlatforms.push(platform);
-          firstError ??= error;
-        } finally {
-          await page.close().catch(() => {});
-        }
-        if (videos.size >= query.limit) break;
-      }
-      if (videos.size === 0 && firstError) {
-        throw firstError instanceof BrowserJobError ? firstError : new BrowserJobError(browserErrorCode(firstError));
-      }
-      return { videos: [...videos.values()], unavailablePlatforms };
-    })(), 45_000);
+      return scan(await session.newPage(), url, platform, query.limit);
+    })(), 20_000);
   } finally {
     expired = true;
     if (browser) await close(browser);

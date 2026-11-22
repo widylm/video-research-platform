@@ -1,13 +1,19 @@
 import { z } from "zod";
-import { bulkQuerySchema, type BulkVideo } from "./bulk-search.ts";
+import { bulkPlatforms, bulkQuerySchema, type BulkPlatform, type BulkVideo } from "./bulk-search.ts";
 
 export const cloudBrowserUrl = "/api/cloud-browser";
 export const cloudBrowserQuery = bulkQuerySchema.strict().refine(({ platform, filters, limit }) =>
   platform === "all" && filters === undefined && limit <= 10);
 
-export const cloudSocialQuery = bulkQuerySchema.extend({ mode: z.literal("social") }).strict().refine(({ limit, filters }) => limit <= 20 && filters === undefined);
+export const cloudSocialLimit = 10;
+export const cloudSocialQuery = bulkQuerySchema.extend({ mode: z.literal("social"), platform: z.enum(bulkPlatforms) })
+  .strict().refine(({ limit, filters }) => limit <= cloudSocialLimit && filters === undefined);
 export const cloudBrowserRequest = cloudBrowserQuery.or(cloudSocialQuery);
 
+export function socialPilotPlatform(env: { KADR_ENABLE_SOCIAL_DISCOVERY?: string; KADR_SOCIAL_DISCOVERY_PLATFORM?: string }): BulkPlatform | undefined {
+  const platform = env.KADR_SOCIAL_DISCOVERY_PLATFORM;
+  return env.KADR_ENABLE_SOCIAL_DISCOVERY === "1" && (platform === "tiktok" || platform === "instagram") ? platform : undefined;
+}
 
 export interface CloudBrowserRecord {
   id: string;
@@ -38,6 +44,12 @@ export const cloudBrowserErrors = {
   timed_out: "Облачный браузер не успел завершить поиск.",
   interrupted: "Выполнение было прервано. Запустите поиск снова.",
   social_disabled: "Поиск публичных видео пока не включён в этом окружении.",
+  social_already_run: "Разрешённый пробный запуск уже использован.",
+  source_http_401: "Площадка вернула HTTP 401. Требуется авторизация.",
+  source_http_403: "Площадка вернула HTTP 403. Доступ запрещён.",
+  source_http_429: "Площадка вернула HTTP 429. Достигнут лимит запросов.",
+  source_http_451: "Площадка вернула HTTP 451. Доступ ограничен по правовым причинам.",
+  source_login_required: "Площадка перенаправила на вход или потребовала войти.",
 } as const;
 export type CloudBrowserErrorCode = keyof typeof cloudBrowserErrors;
 
@@ -47,7 +59,6 @@ export interface CloudBrowserJob {
   keywords: string;
   records: CloudBrowserRecord[];
   videos?: BulkVideo[];
-  unavailablePlatforms?: ("tiktok" | "instagram")[];
   mode?: "neutral" | "social";
   error?: CloudBrowserErrorCode;
 }

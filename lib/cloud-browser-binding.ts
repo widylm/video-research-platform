@@ -1,5 +1,6 @@
 import "server-only";
 import { getCloudflareContext } from "@opennextjs/cloudflare";
+import { socialPilotPlatform } from "./cloud-browser-contract";
 
 export function cloudBrowserBinding() {
   try {
@@ -7,6 +8,14 @@ export function cloudBrowserBinding() {
     return (env as { KADR_BROWSER_EXECUTOR?: { fetch(request: Request): Promise<Response> } }).KADR_BROWSER_EXECUTOR;
   } catch {
     // Normal Next.js and the default Worker can run without the optional binding.
+    return undefined;
+  }
+}
+
+export function cloudBrowserSocialPlatform() {
+  try {
+    return socialPilotPlatform(getCloudflareContext().env as Parameters<typeof socialPilotPlatform>[0]);
+  } catch {
     return undefined;
   }
 }
