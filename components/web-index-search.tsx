@@ -1,6 +1,7 @@
 "use client";
 import { useState, type FormEvent } from "react";
 import { Search } from "lucide-react";
+import { savePublicVideo } from "@/app/actions";
 import type { IndexedVideo, WebIndexPlatform } from "@/lib/web-index-video";
 
 type Platform = "all" | WebIndexPlatform;
@@ -11,12 +12,14 @@ const errors: Record<string, string> = {
   index_unavailable: "Веб-индекс сейчас недоступен из облака. Попробуйте позже.",
   index_rate_limited: "Веб-индекс ограничил запросы. Попробуйте позже.",
 };
-export function WebIndexSearch() {
+export function WebIndexSearch({ canSave }: { canSave: boolean }) {
   const [keywords, setKeywords] = useState("");
   const [platform, setPlatform] = useState<Platform>("all");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string[]>([]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (loading) return;
@@ -35,6 +38,22 @@ export function WebIndexSearch() {
     } catch (error) {
       setError(error instanceof Error ? error.message : errors.index_unavailable);
     } finally { setLoading(false); }
+  }
+  async function saveVideo(video: IndexedVideo) {
+    const key = `${video.platform}:${video.externalId}`;
+    if (saving) return;
+    setSaving(key);
+    setError("");
+    try {
+      const result = await savePublicVideo({
+        url: video.url, title: "", description: "", publishedAt: "", hashtags: "",
+        views: "", likes: "", collectionId: "",
+      });
+      if ("error" in result) setError(result.error);
+      else setSaved(previous => [...previous, key]);
+    } catch {
+      setError("Не удалось сохранить ссылку. Повторите попытку.");
+    } finally { setSaving(null); }
   }
   return <section className="results-section" aria-label="Поиск новых видео в интернете">
     <form className="panel pilot-form" onSubmit={submit}>
@@ -68,6 +87,9 @@ export function WebIndexSearch() {
         <p>{video.platform === "tiktok" ? "TikTok" : "Instagram"}{video.author ? " · @" + video.author : ""}</p>
         {video.indexSnippet && <p>{video.indexSnippet}</p>}
         <a href={video.url} target="_blank" rel="noopener noreferrer">Открыть оригинальную ссылку</a>
+        {canSave && <button className="button quiet" type="button" disabled={!!saving || saved.includes(`${video.platform}:${video.externalId}`)} onClick={() => void saveVideo(video)}>
+          {saved.includes(`${video.platform}:${video.externalId}`) ? "В общем каталоге" : saving === `${video.platform}:${video.externalId}` ? "Сохраняем…" : "Сохранить в общий каталог"}
+        </button>}
       </article>)}
     </div>}
   </section>;
