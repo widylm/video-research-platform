@@ -714,10 +714,12 @@ test("collection UI polls an asynchronous job, displays its counters and saves m
   assert.equal(saved.is_mock, false);
   job = { id: job.id, keywords: submitted.keywords, state: "failed", records: [], error: "source_not_ready",
     diagnostics: { navigationStatus: 200, pageTitle: "TikTok", elapsedMs: 16_000, visibleLinks: 0,
-      metadataResponses: 0, metadataItems: 0, failedRequests: 2, blockedHosts: ["example.invalid"] } };
+      metadataResponses: 1, metadataItems: 0, failedRequests: 2, blockedHosts: ["example.invalid"],
+      apiResponses: [{ httpStatus: 200, format: "json", apiCode: 10204, items: 0 }] } };
   await button(page, "Обновить состояние").click();
   await results.getByText("Подробности сбоя — можно прислать для проверки", { exact: true }).click();
   await results.getByText(/Статус страницы: 200/).waitFor();
   await results.getByText(/Ожидание: 16 сек/).waitFor();
   await results.getByText(/Заблокированные сборщиком домены: example.invalid/).waitFor();
+  await results.getByText(/Ответы соцсети: HTTP 200, код 10204, JSON, роликов 0/).waitFor();
 });

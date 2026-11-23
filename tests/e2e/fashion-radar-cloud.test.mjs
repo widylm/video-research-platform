@@ -51,6 +51,15 @@ test('page scripts and GraphQL POST requests can load while private targets and 
   assert.equal(allowed('https://www.tiktok.com/tag/test', 'GET', 'document', true), false);
   assert.equal(responseIsMetadata('https://www.tiktok.com/api/challenge/item_list/', 'tiktok'), true);
   assert.equal(responseIsMetadata('https://www.tiktok.com/api/search/item/full/', 'instagram'), false);
+  for (const host of ['mssdk16-normal-useastred.tiktokw.eu', 'verification16-normal-useastred.tiktokw.eu',
+    'starling16-normal-useastred.tiktokv.eu']) {
+    const resource = `https://${host}/service?token=not-recorded`;
+    assert.equal(allowedBrowserResource(resource, false, 'https://www.tiktok.com', 'POST', 'fetch'), true);
+    assert.equal(allowedBrowserResource(resource, true, 'https://www.tiktok.com', 'GET', 'document'), false);
+    assert.equal(allowedBrowserResource(resource, false, 'https://www.tiktok.com', 'GET', 'media'), false);
+    assert.equal(allowedBrowserResource(`https://${host}.evil.example/script`, false, 'https://www.tiktok.com', 'GET', 'script'), false);
+  }
+  assert.equal(allowedBrowserResource('https://unverified.tiktokw.eu/script', false, 'https://www.tiktok.com', 'GET', 'script'), false);
 });
 
 test('date filters exclude unknown dates and preserve the boundary instead of returning undated videos as fresh', () => {
@@ -60,7 +69,7 @@ test('date filters exclude unknown dates and preserve the boundary instead of re
   assert.equal(filterCollected(rows, { ...query, filters: { minViews: 1 } }).length, 0);
 });
 
-function fakePage(state, network) {
+function fakePage(state, network, body = JSON.stringify({ itemList: [tiktok] })) {
   let currentUrl = discoveryUrl(query.platform, query.keywords), reads = 0;
   const handlers = {};
   return {
@@ -68,7 +77,7 @@ function fakePage(state, network) {
     goto: async href => {
       currentUrl = href;
       if (network) handlers.response({ url: () => 'https://www.tiktok.com/api/challenge/item_list/', status: () => 200,
-        ok: () => true, headers: () => ({}), text: async () => JSON.stringify({ itemList: [tiktok] }) });
+        ok: () => true, headers: () => ({}), text: async () => body });
       return { ok: () => true, status: () => 200 };
     },
     url: () => currentUrl,
@@ -119,11 +128,32 @@ test('a failed load includes bounded diagnostics without recording request URLs,
   await assert.rejects(collectFashionRadar(page, query, { now: () => clock, pause: async ms => { clock += ms; } }), error => {
     assert.equal(error.code, 'source_not_ready');
     assert.deepEqual(error.diagnostics, { navigationStatus: 200, pageTitle: 'TikTok', elapsedMs: 16_000,
-      visibleLinks: 0, metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: ['unknown.example'] });
+      visibleLinks: 0, metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: ['unknown.example'], apiResponses: [] });
     assert.ok(!JSON.stringify(error.diagnostics).includes('secret'));
     assert.ok(!JSON.stringify(error.diagnostics).includes('public page text'));
     return true;
   });
+});
+
+test('an HTTP 200 response without videos reports its format and API code without leaking the payload or claiming success', async () => {
+  const fixtures = [
+    ['', { httpStatus: 200, format: 'empty', items: 0 }],
+    ['<html>secret-payload</html>', { httpStatus: 200, format: 'invalid_json', items: 0 }],
+    [JSON.stringify({ statusCode: 10204, statusMsg: 'secret-payload', itemList: [] }),
+      { httpStatus: 200, format: 'json', items: 0, apiCode: 10204 }],
+    [JSON.stringify({ status_code: '0', token: 'secret-payload', itemList: [] }),
+      { httpStatus: 200, format: 'json', items: 0, apiCode: 0 }],
+  ];
+  for (const [body, expected] of fixtures) {
+    const page = fakePage(() => ({}), true, body);
+    await assert.rejects(collectFashionRadar(page, query, { pause: async () => {} }), error => {
+      assert.equal(error.code, 'source_not_ready');
+      assert.equal(error.diagnostics.metadataResponses, 1);
+      assert.deepEqual(error.diagnostics.apiResponses, [expected]);
+      assert.ok(!JSON.stringify(error.diagnostics).includes('secret-payload'));
+      return true;
+    });
+  }
 });
 
 test('login, human verification and an unloaded page are errors rather than a fake or successful empty result', async () => {
@@ -152,7 +182,8 @@ test('the real executor accepts collection queries without a provider key and qu
   assert.equal(queued.state, 'pending');
   assert.equal(values.get('budget').requests, 1);
   const diagnostics = { navigationStatus: 200, pageTitle: 'TikTok', elapsedMs: 16_000, visibleLinks: 0,
-    metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: [] };
+    metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: [],
+    apiResponses: [{ httpStatus: 200, format: 'json', apiCode: 10204, items: 0 }] };
   const key = `job:${queued.id}`;
   values.set(key, { ...values.get(key), state: 'failed', error: 'source_not_ready', diagnostics });
   const status = await executor.fetch(new Request('https://executor.internal/jobs', {

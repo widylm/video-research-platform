@@ -49,6 +49,13 @@ export const cloudBrowserErrors = {
 } as const;
 export type CloudBrowserErrorCode = keyof typeof cloudBrowserErrors;
 
+export interface CloudBrowserApiResponse {
+  httpStatus: number;
+  apiCode?: number;
+  format: "json" | "empty" | "invalid_json" | "unreadable" | "skipped";
+  items: number;
+}
+
 export interface CloudBrowserDiagnostics {
   navigationStatus?: number;
   pageTitle: string;
@@ -58,6 +65,7 @@ export interface CloudBrowserDiagnostics {
   metadataItems: number;
   failedRequests: number;
   blockedHosts: string[];
+  apiResponses?: CloudBrowserApiResponse[];
 }
 
 export interface CloudBrowserJob {

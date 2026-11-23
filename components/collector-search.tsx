@@ -13,6 +13,7 @@ const date = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeZone: "
 const describe = (code?: string) => code && code in cloudBrowserErrors
   ? cloudBrowserErrors[code as keyof typeof cloudBrowserErrors] : "Не удалось связаться со сборщиком. Обновите состояние.";
 const metric = (value: number | null) => value === null ? "Нет данных" : number.format(value);
+const responseFormats = { json: "JSON", empty: "пустой ответ", invalid_json: "не JSON", unreadable: "не удалось прочитать", skipped: "не прочитан" };
 
 export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; canCollect: boolean }) {
   const [job, setJob] = useState<CloudBrowserJob | null>(null);
@@ -134,6 +135,8 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
           {" "}Ответов с данными: {job.diagnostics.metadataResponses}. Записей в данных: {job.diagnostics.metadataItems}.
           {" "}Сетевых ошибок: {job.diagnostics.failedRequests}.</p>
         {!!job.diagnostics.blockedHosts.length && <p>Заблокированные сборщиком домены: {job.diagnostics.blockedHosts.join(", ")}</p>}
+        {!!job.diagnostics.apiResponses?.length && <p>Ответы соцсети: {job.diagnostics.apiResponses.map(response =>
+          `HTTP ${response.httpStatus}, код ${response.apiCode ?? "не указан"}, ${responseFormats[response.format]}, роликов ${response.items}`).join("; ")}</p>}
       </details>}
       {job.state === "completed" && job.videos === undefined && <p className="notice error">Подключён тестовый исполнитель. Для сбора роликов требуется исполнитель Fashion Radar.</p>}
       {job.state === "completed" && job.videos !== undefined && !videos.length && <p className="panel empty-state">

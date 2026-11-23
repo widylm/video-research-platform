@@ -1,6 +1,6 @@
 import puppeteer, { type Browser, type Page } from "@cloudflare/puppeteer";
 import { bulkVideoSchema, type BulkVideo } from "../../lib/bulk-search.ts";
-import type { CloudBrowserDiagnostics, CloudBrowserErrorCode, FashionRadarQuery } from "../../lib/cloud-browser-contract.ts";
+import type { CloudBrowserApiResponse, CloudBrowserDiagnostics, CloudBrowserErrorCode, FashionRadarQuery } from "../../lib/cloud-browser-contract.ts";
 import { parseVideoLink } from "../../lib/public-video-url.ts";
 import { BrowserJobError, withDeadline, type BrowserBinding } from "./source.ts";
 import { discoveryUrl, explicitlyEmpty, extractMetadata, filterCollected, mergeMetadata, pageProblem } from "./fashion-radar/metadata.mjs";
@@ -10,6 +10,14 @@ const maxPayload = 2_000_000;
 const maxResponses = 24;
 const resourceHosts = ["tiktok.com", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com", "ttwstatic.com",
   "byteoversea.com", "ibytedtos.com", "tiktokv.com", "instagram.com", "cdninstagram.com", "fbcdn.net", "facebook.com"];
+// Exact service hosts observed in the failed live run; do not allow arbitrary
+// .eu hosts or navigate to a verification endpoint. Site scripts may load their
+// normal dependencies; any displayed verification still stops collection.
+const tiktokServiceHosts = new Set([
+  "mssdk16-normal-useastred.tiktokw.eu",
+  "verification16-normal-useastred.tiktokw.eu",
+  "starling16-normal-useastred.tiktokv.eu",
+]);
 
 export function allowedBrowserResource(raw: string, navigation: boolean, origin: string, method: string, type: string) {
   if (!URL.canParse(raw)) return false;
@@ -17,7 +25,8 @@ export function allowedBrowserResource(raw: string, navigation: boolean, origin:
   if (url.protocol !== "https:" || url.username || url.password || url.port || !["GET", "POST"].includes(method)) return false;
   if (navigation) return method === "GET" && url.origin === origin;
   return !["image", "media", "font"].includes(type)
-    && resourceHosts.some(host => url.hostname === host || url.hostname.endsWith(`.${host}`));
+    && (resourceHosts.some(host => url.hostname === host || url.hostname.endsWith(`.${host}`))
+      || origin === "https://www.tiktok.com" && tiktokServiceHosts.has(url.hostname));
 }
 
 export function responseIsMetadata(raw: string, platform: FashionRadarQuery["platform"]) {
@@ -47,15 +56,22 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   let navigationStatus: number | undefined = undefined;
   let failedRequests = 0;
   const blockedHosts = new Set<string>();
+  const apiResponses: CloudBrowserApiResponse[] = [];
   const diagnostics = (): CloudBrowserDiagnostics => ({ navigationStatus, pageTitle,
     elapsedMs: Math.max(0, now() - startedAt), visibleLinks: visible.size,
-    metadataResponses: responses, metadataItems: rows.size, failedRequests, blockedHosts: [...blockedHosts] });
+    metadataResponses: responses, metadataItems: rows.size, failedRequests, blockedHosts: [...blockedHosts],
+    apiResponses: apiResponses.map(response => ({ ...response })) });
   const fail = (code: CloudBrowserErrorCode): never => { throw new BrowserJobError(code, diagnostics()); };
   const add = (data: unknown) => {
+    let count = 0;
     for (const row of extractMetadata(query.platform, data)) {
       const parsed = bulkVideoSchema.safeParse(row);
-      if (parsed.success) rows.set(row.externalId, mergeMetadata(rows.get(row.externalId), parsed.data));
+      if (parsed.success) {
+        rows.set(row.externalId, mergeMetadata(rows.get(row.externalId), parsed.data));
+        count += 1;
+      }
     }
+    return count;
   };
 
   await page.setRequestInterception(true);
@@ -75,13 +91,28 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   });
   page.on("response", response => {
     if (!responseIsMetadata(response.url(), query.platform) || responses >= maxResponses) return;
+    responses += 1;
+    const info: CloudBrowserApiResponse = { httpStatus: response.status(), format: "skipped", items: 0 };
+    if (apiResponses.length === 4) apiResponses.shift();
+    apiResponses.push(info);
     if (response.status() === 429) { rateLimited = true; return; }
     if (!response.ok() || Number(response.headers()["content-length"] ?? 0) > maxPayload) return;
-    responses += 1;
     const task = (async () => {
       const body = await response.text();
-      if (body.length <= maxPayload) add(JSON.parse(body.replace(/^for \(;;\);/, "")));
-    })().catch(() => {}).finally(() => pending.delete(task));
+      if (body.length > maxPayload) return;
+      if (!body.trim()) { info.format = "empty"; return; }
+      let data: unknown;
+      try { data = JSON.parse(body.replace(/^for \(;;\);/, "")); }
+      catch { info.format = "invalid_json"; return; }
+      info.format = "json";
+      if (data && typeof data === "object") {
+        const envelope = data as Record<string, unknown>;
+        const code = envelope.statusCode ?? envelope.status_code;
+        if (typeof code === "number" && Number.isSafeInteger(code) && Math.abs(code) <= 1_000_000_000
+          || typeof code === "string" && /^-?\d{1,9}$/.test(code)) info.apiCode = Number(code);
+      }
+      info.items = add(data);
+    })().catch(() => { info.format = "unreadable"; }).finally(() => pending.delete(task));
     pending.add(task);
   });
 
