@@ -693,7 +693,7 @@ test("collection UI polls an asynchronous job, displays its counters and saves m
       job = { id: crypto.randomUUID(), state: "pending", keywords: submitted.keywords, records: [] };
       return route.fulfill({ status: 202, json: { job } });
     }
-    if (job && ++polls >= 2) job = { ...job, state: "completed", videos: [video], scanned: 1, limited: true };
+    if (job?.state === "pending" && ++polls >= 2) job = { ...job, state: "completed", videos: [video], scanned: 1, limited: true };
     return route.fulfill({ json: { job } });
   });
   await button(page, "Сбор роликов").click();
@@ -712,4 +712,12 @@ test("collection UI polls an asynchronous job, displays its counters and saves m
   const [saved] = await response.json();
   assert.equal(saved.views, 0); assert.equal(saved.likes, 12); assert.equal(saved.description, video.originalDescription);
   assert.equal(saved.is_mock, false);
+  job = { id: job.id, keywords: submitted.keywords, state: "failed", records: [], error: "source_not_ready",
+    diagnostics: { navigationStatus: 200, pageTitle: "TikTok", elapsedMs: 16_000, visibleLinks: 0,
+      metadataResponses: 0, metadataItems: 0, failedRequests: 2, blockedHosts: ["example.invalid"] } };
+  await button(page, "Обновить состояние").click();
+  await results.getByText("Подробности сбоя — можно прислать для проверки", { exact: true }).click();
+  await results.getByText(/Статус страницы: 200/).waitFor();
+  await results.getByText(/Ожидание: 16 сек/).waitFor();
+  await results.getByText(/Заблокированные сборщиком домены: example.invalid/).waitFor();
 });

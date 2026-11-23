@@ -67,7 +67,11 @@ export function pageProblem(platform, page) {
     || /\/(challenge|checkpoint)\//.test(page.url) || page.challenge) return 'manual_intervention_required';
   if (/\/(?:accounts\/)?(?:login|sign-in)(\/|\?|$)/.test(page.url)) return 'source_login_required';
   const problem = platform === 'instagram' ? instagramIssue(page) : pageIssue(page.text, page.links.length);
-  if (problem) return /вход|войти|login|log in/i.test(problem) ? 'source_login_required' : 'source_not_ready';
+  // The local TikTok collector returns { phase, message }, whereas Instagram
+  // returns a string. Testing the object itself loses the actual explanation.
+  const message = typeof problem === 'string' ? problem : problem?.message;
+  if (message && /captcha|ползунок|пазл|verify to continue/i.test(message)) return 'manual_intervention_required';
+  if (message) return /вход|войти|login|log in/i.test(message) ? 'source_login_required' : 'source_not_ready';
   return null;
 }
 

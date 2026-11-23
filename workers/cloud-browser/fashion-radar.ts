@@ -1,6 +1,6 @@
 import puppeteer, { type Browser, type Page } from "@cloudflare/puppeteer";
 import { bulkVideoSchema, type BulkVideo } from "../../lib/bulk-search.ts";
-import type { FashionRadarQuery } from "../../lib/cloud-browser-contract.ts";
+import type { CloudBrowserDiagnostics, CloudBrowserErrorCode, FashionRadarQuery } from "../../lib/cloud-browser-contract.ts";
 import { parseVideoLink } from "../../lib/public-video-url.ts";
 import { BrowserJobError, withDeadline, type BrowserBinding } from "./source.ts";
 import { discoveryUrl, explicitlyEmpty, extractMetadata, filterCollected, mergeMetadata, pageProblem } from "./fashion-radar/metadata.mjs";
@@ -34,7 +34,8 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   if (!url) throw new BrowserJobError("invalid_query");
   const now = options.now ?? Date.now;
   const pause = options.pause ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
-  const deadline = now() + 35_000;
+  const startedAt = now();
+  const deadline = startedAt + 35_000;
   const origin = new URL(url).origin;
   const rows = new Map<string, BulkVideo>();
   const visible = new Map<string, string>();
@@ -42,7 +43,14 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   let responses = 0;
   let rateLimited = false;
   let empty = false;
-  let lastText = "";
+  let pageTitle = "";
+  let navigationStatus: number | undefined = undefined;
+  let failedRequests = 0;
+  const blockedHosts = new Set<string>();
+  const diagnostics = (): CloudBrowserDiagnostics => ({ navigationStatus, pageTitle,
+    elapsedMs: Math.max(0, now() - startedAt), visibleLinks: visible.size,
+    metadataResponses: responses, metadataItems: rows.size, failedRequests, blockedHosts: [...blockedHosts] });
+  const fail = (code: CloudBrowserErrorCode): never => { throw new BrowserJobError(code, diagnostics()); };
   const add = (data: unknown) => {
     for (const row of extractMetadata(query.platform, data)) {
       const parsed = bulkVideoSchema.safeParse(row);
@@ -54,7 +62,16 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   page.on("request", request => {
     const allowed = allowedBrowserResource(request.url(), request.isNavigationRequest(), origin,
       request.method(), request.resourceType());
+    if (!allowed && ["script", "document", "fetch", "xhr", "stylesheet"].includes(request.resourceType())
+      && blockedHosts.size < 12 && URL.canParse(request.url())) {
+      // Only hostnames, never request URLs, query strings, headers or cookies.
+      blockedHosts.add(new URL(request.url()).hostname.slice(0, 120));
+    }
     void (allowed ? request.continue() : request.abort()).catch(() => {});
+  });
+  page.on("requestfailed", request => {
+    if (allowedBrowserResource(request.url(), request.isNavigationRequest(), origin,
+      request.method(), request.resourceType())) failedRequests += 1;
   });
   page.on("response", response => {
     if (!responseIsMetadata(response.url(), query.platform) || responses >= maxResponses) return;
@@ -69,17 +86,18 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   });
 
   const navigation = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 });
-  if (!navigation) throw new BrowserJobError("source_not_ready");
-  if (navigation.status() === 429) throw new BrowserJobError("source_rate_limited");
-  if (navigation.status() === 401) throw new BrowserJobError("source_login_required");
-  if (!navigation.ok()) throw new BrowserJobError("source_denied");
+  if (!navigation) return fail("source_not_ready");
+  navigationStatus = navigation.status();
+  if (navigationStatus === 429) fail("source_rate_limited");
+  if (navigationStatus === 401) fail("source_login_required");
+  if (!navigation.ok()) fail("source_denied");
   const landed = new URL(page.url());
-  if (landed.origin !== origin) throw new BrowserJobError("source_denied");
+  if (landed.origin !== origin) fail("source_denied");
 
   let unchanged = 0;
   for (let step = 0; step < 8 && now() < deadline && !rateLimited; step += 1) {
     // Give JavaScript and normal cross-origin API requests time to populate the page.
-    await pause(step === 0 ? 1_000 : 750);
+    await pause(2_000);
     const state = await page.evaluate(() => ({
       url: location.href, title: document.title,
       text: (document.body?.innerText ?? "").slice(0, 4_000),
@@ -89,10 +107,10 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
       hydration: [...document.querySelectorAll('script[type="application/json"],script#__UNIVERSAL_DATA_FOR_REHYDRATION__,script#SIGI_STATE')]
         .slice(0, 12).map(node => node.textContent ?? "").filter(text => text.length < 1_000_000),
     }));
+    pageTitle = state.title.slice(0, 160);
     const problem = pageProblem(query.platform, state);
-    if (problem) throw new BrowserJobError(problem);
-    lastText = state.text;
-    empty = explicitlyEmpty(lastText);
+    if (problem) fail(problem);
+    empty = explicitlyEmpty(state.text);
     const before = visible.size;
     for (const href of state.links) {
       const link = parseVideoLink(href);
@@ -104,7 +122,9 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
     const found = filterCollected([...rows.values()].filter(row => visible.has(row.externalId)), query);
     if (found.length >= query.limit || empty) break;
     unchanged = visible.size === before ? unchanged + 1 : 0;
-    if (step >= 3 && unchanged >= 3) break;
+    // An empty initial render is not the end of the result list. TikTok may
+    // load scripts/data after several seconds on a fresh cloud browser.
+    if (visible.size > 0 && step >= 3 && unchanged >= 3) break;
     await page.evaluate(() => {
       const links = document.querySelectorAll('a[href*="/video/"],a[href*="/reel/"],a[href*="/p/"]');
       const last = links.item(links.length - 1);
@@ -144,7 +164,7 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   }
   await withDeadline(Promise.allSettled([...pending]), 2_000);
 
-  if (!visible.size && !empty) throw new BrowserJobError(rateLimited ? "source_rate_limited" : "source_not_ready");
+  if (!visible.size && !empty) fail(rateLimited ? "source_rate_limited" : "source_not_ready");
   // Links alone still represent real videos, with missing fields kept explicitly unknown.
   for (const [id, href] of visible) {
     if (rows.has(id)) continue;

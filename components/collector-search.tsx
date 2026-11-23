@@ -126,6 +126,15 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
     {job && <section className="results-section" aria-label="Собранные ролики">
       <p role="status">{status[job.state]} · {job.keywords}{job.state === "completed" ? ` · Найдено: ${videos.length} · Проверено ссылок: ${job.scanned ?? 0}` : ""}</p>
       {job.error && <p className="notice error" role="alert">{describe(job.error)}</p>}
+      {job.error && job.diagnostics && <details className="panel">
+        <summary>Подробности сбоя — можно прислать для проверки</summary>
+        <p>Код: {job.error}. Статус страницы: {job.diagnostics.navigationStatus ?? "не получен"}.
+          {" "}Заголовок: {job.diagnostics.pageTitle || "не получен"}.</p>
+        <p>Ожидание: {Math.round(job.diagnostics.elapsedMs / 1000)} сек. Ссылок на ролики: {job.diagnostics.visibleLinks}.
+          {" "}Ответов с данными: {job.diagnostics.metadataResponses}. Записей в данных: {job.diagnostics.metadataItems}.
+          {" "}Сетевых ошибок: {job.diagnostics.failedRequests}.</p>
+        {!!job.diagnostics.blockedHosts.length && <p>Заблокированные сборщиком домены: {job.diagnostics.blockedHosts.join(", ")}</p>}
+      </details>}
       {job.state === "completed" && job.videos === undefined && <p className="notice error">Подключён тестовый исполнитель. Для сбора роликов требуется исполнитель Fashion Radar.</p>}
       {job.state === "completed" && job.videos !== undefined && !videos.length && <p className="panel empty-state">
         В проверенной выдаче нет роликов, подходящих по выбранным датам. Попробуйте другой запрос или период «Все доступные даты».

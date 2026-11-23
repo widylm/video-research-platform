@@ -2,7 +2,7 @@ import { z } from "zod";
 import { cloudBrowserQuery, fashionRadarQuery, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
 import { storeObservations } from "./catalog.ts";
-import { browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
+import { BrowserJobError, browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
 import { runFashionRadar } from "./fashion-radar.ts";
 
 interface Transaction {
@@ -34,8 +34,8 @@ const cooldownMs = 20_000;
 const jobKey = (id: string) => `job:${id}`;
 const userKey = (user: string) => `user:${user}`;
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const publicJob = ({ id, state, keywords, records, videos, scanned, limited, error }: StoredJob): CloudBrowserJob =>
-  ({ id, state, keywords, records, videos, scanned, limited, error });
+const publicJob = ({ id, state, keywords, records, videos, scanned, limited, error, diagnostics }: StoredJob): CloudBrowserJob =>
+  ({ id, state, keywords, records, videos, scanned, limited, error, diagnostics });
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 export function reserveBudget(previous: Budget | undefined, now: number): Budget | null {
@@ -136,7 +136,8 @@ export class CloudBrowserJobs {
         result = { ...running, state: "completed", records: [...records] };
       }
     } catch (error) {
-      result = { ...running, state: "failed", error: browserErrorCode(error) };
+      result = { ...running, state: "failed", error: browserErrorCode(error),
+        diagnostics: error instanceof BrowserJobError ? error.diagnostics : undefined };
     }
     await storage.transaction(async (transaction) => {
       if (await transaction.get<string>(slot) !== running.id) return;

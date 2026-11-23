@@ -84,6 +84,48 @@ test('a browser collection waits for delayed page content, reads observed respon
   assert.equal(result.videos[0].comments, 3); assert.equal(result.scanned, 1);
 });
 
+test('a fresh cloud page gets time to render instead of being declared empty after four seconds', async () => {
+  let clock = 0;
+  const page = fakePage(() => ({ links: clock >= 12_000 ? [url] : [] }), true);
+  const result = await collectFashionRadar(page, { ...query, limit: 1 }, {
+    now: () => clock, pause: async ms => { clock += ms; },
+  });
+  assert.equal(result.videos.length, 1);
+  assert.ok(clock >= 12_000);
+});
+
+test('native TikTok status objects retain login and slider-verification reasons on the normal search URL', async () => {
+  const fixtures = [
+    ['Log in to see more videos', 'source_login_required'],
+    ['Войдите, чтобы увидеть результаты поиска', 'source_login_required'],
+    ['Drag the slider to complete the puzzle', 'manual_intervention_required'],
+    ['Something went wrong', 'source_not_ready'],
+  ];
+  for (const [text, code] of fixtures) {
+    await assert.rejects(collectFashionRadar(fakePage(() => ({ text }), false), query, { pause: async () => {} }),
+      error => error.code === code && error.diagnostics.navigationStatus === 200);
+  }
+});
+
+test('a failed load includes bounded diagnostics without recording request URLs, tokens or page body', async () => {
+  let clock = 0;
+  const page = fakePage(() => ({ title: 'TikTok', text: 'public page text' }), false);
+  const originalOn = page.on;
+  page.on = (event, handler) => {
+    originalOn(event, handler);
+    if (event === 'request') handler({ url: () => 'https://unknown.example/script.js?token=secret',
+      isNavigationRequest: () => false, method: () => 'GET', resourceType: () => 'script', abort: async () => {} });
+  };
+  await assert.rejects(collectFashionRadar(page, query, { now: () => clock, pause: async ms => { clock += ms; } }), error => {
+    assert.equal(error.code, 'source_not_ready');
+    assert.deepEqual(error.diagnostics, { navigationStatus: 200, pageTitle: 'TikTok', elapsedMs: 16_000,
+      visibleLinks: 0, metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: ['unknown.example'] });
+    assert.ok(!JSON.stringify(error.diagnostics).includes('secret'));
+    assert.ok(!JSON.stringify(error.diagnostics).includes('public page text'));
+    return true;
+  });
+});
+
 test('login, human verification and an unloaded page are errors rather than a fake or successful empty result', async () => {
   const fixtures = [
     [{ url: 'https://www.tiktok.com/login', links: [] }, 'source_login_required'],
@@ -106,6 +148,17 @@ test('the real executor accepts collection queries without a provider key and qu
     headers: { 'x-kadr-profile': crypto.randomUUID() } });
   const response = await executor.fetch(request);
   assert.equal(response.status, 202);
-  assert.equal((await response.json()).job.state, 'pending');
+  const queued = (await response.json()).job;
+  assert.equal(queued.state, 'pending');
   assert.equal(values.get('budget').requests, 1);
+  const diagnostics = { navigationStatus: 200, pageTitle: 'TikTok', elapsedMs: 16_000, visibleLinks: 0,
+    metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: [] };
+  const key = `job:${queued.id}`;
+  values.set(key, { ...values.get(key), state: 'failed', error: 'source_not_ready', diagnostics });
+  const status = await executor.fetch(new Request('https://executor.internal/jobs', {
+    headers: { 'x-kadr-profile': request.headers.get('x-kadr-profile') },
+  }));
+  const publicJob = (await status.json()).job;
+  assert.deepEqual(publicJob.diagnostics, diagnostics);
+  assert.equal(publicJob.query, undefined);
 });
