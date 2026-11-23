@@ -77,10 +77,13 @@ async function signedInAs(t, role, appUrl) {
 
 test("the authenticated Кадр API runs a server-side Wrangler Browser Run session for the separate neutral fixture", { timeout: 120_000 }, async (t) => {
   let hits = 0;
-  let unexpected = 0;
+  const unexpected = [];
   let userAgent = "";
   const fixture = createServer((incoming, outgoing) => {
-    if (incoming.url !== "/catalog") { unexpected += 1; return outgoing.writeHead(404).end(); }
+    // Chromium may request the tab icon outside page interception while closing.
+    // Keep asserting that the document's image and all other side requests fail.
+    if (incoming.url === "/favicon.ico") return outgoing.writeHead(204).end();
+    if (incoming.url !== "/catalog") { unexpected.push(incoming.url); return outgoing.writeHead(404).end(); }
     hits += 1;
     userAgent = incoming.headers["user-agent"] ?? "";
     setTimeout(() => outgoing.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(
@@ -119,7 +122,7 @@ test("the authenticated Кадр API runs a server-side Wrangler Browser Run ses
   assert.equal(completed.records[0].url, source);
   assert.equal(hits, 1);
   assert.match(userAgent, /Chrome/);
-  assert.equal(unexpected, 0);
+  assert.deepEqual(unexpected, []);
   await editor.reload();
   assert.equal((await (await editor.request.get(api)).json()).job.id, completed.id);
   assert.equal(hits, 1);
