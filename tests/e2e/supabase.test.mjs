@@ -17,10 +17,14 @@ const privateName = "Личное исследование";
 
 let browser;
 let stack;
+let cloudPreview;
 
 before(async () => {
   browser = await chromium.launch({ executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
   stack = await startSupabaseStack();
+  // Catalog scenarios use an explicitly saved fixture. Seeded demo rows stay in
+  // the database to verify that they are excluded from the team's real catalog.
+  await addCatalogFixture("tiktok", "7412345678901234500", { p_title: videoTitle, p_published_at: "2026-11-16" });
 }, { timeout: 240_000 });
 
 after(async () => {
@@ -71,7 +75,7 @@ async function signedInAs(t, role, appUrl) {
   return page;
 }
 
-test("the authenticated Кадр UI runs a server-side Wrangler Browser Run session and shows a neutral document", { timeout: 120_000 }, async (t) => {
+test("the authenticated Кадр API runs a server-side Wrangler Browser Run session for the separate neutral fixture", { timeout: 120_000 }, async (t) => {
   let hits = 0;
   let unexpected = 0;
   let userAgent = "";
@@ -88,6 +92,7 @@ test("the authenticated Кадр UI runs a server-side Wrangler Browser Run sess
   t.after(() => { fixture.close(); fixture.closeAllConnections(); });
   const source = `http://127.0.0.1:${fixture.address().port}/catalog`;
   const preview = await stack.startCloudBrowser(source);
+  cloudPreview = preview;
   const api = preview.url + "/api/cloud-browser";
   const input = { platform: "all", keywords: "mosses", limit: 10 };
   assert.equal((await fetch(stack.appUrl + "/api/cloud-browser")).status, 404);
@@ -97,28 +102,26 @@ test("the authenticated Кадр UI runs a server-side Wrangler Browser Run sess
   const editor = await signedInAs(t, "member", preview.url);
   assert.equal((await editor.request.post(api, { data: input, headers: { origin: "https://other.example" } })).status(), 403);
   assert.equal((await editor.request.post(api, { data: { ...input, platform: "tiktok" } })).status(), 400);
-  await button(editor, "Массовый поиск").click();
-  await editor.getByLabel("Ключевые слова").fill("mosses");
-  const accepted = editor.waitForResponse((response) => response.url() === api && response.request().method() === "POST");
-  await button(editor, "Найти").click();
-  const submitted = await accepted;
+  const submitted = await editor.request.post(api, { data: input });
   const submission = await submitted.json();
   assert.equal(submitted.status(), 202, JSON.stringify(submission));
   assert.equal(submission.job.state, "pending");
   assert.equal((await editor.request.post(api, { data: input })).status(), 409);
-  const results = editor.getByRole("region", { name: "Результаты облачной проверки" });
-  await results.getByRole("heading", { name: "Catalogue of mosses" }).waitFor({ timeout: 55_000 }).catch(async (error) => {
-    const response = await editor.request.get(api);
-    throw new Error(`${error.message}\n${await response.text()}\n${preview.logs()}`);
-  });
-  await results.getByText("A neutral document about mosses.").waitFor();
-  assert.equal(await results.getByRole("link").getAttribute("href"), source);
+  let completed;
+  for (let attempt = 0; attempt < 55; attempt += 1) {
+    completed = (await (await editor.request.get(api)).json()).job;
+    if (completed.state === "completed" || completed.state === "failed") break;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  assert.equal(completed.state, "completed", JSON.stringify(completed) + preview.logs());
+  assert.equal(completed.records[0].title, "Catalogue of mosses");
+  assert.equal(completed.records[0].description, "A neutral document about mosses.");
+  assert.equal(completed.records[0].url, source);
   assert.equal(hits, 1);
   assert.match(userAgent, /Chrome/);
   assert.equal(unexpected, 0);
   await editor.reload();
-  await button(editor, "Массовый поиск").click();
-  await results.getByRole("heading", { name: "Catalogue of mosses" }).waitFor();
+  assert.equal((await (await editor.request.get(api)).json()).job.id, completed.id);
   assert.equal(hits, 1);
   const admin = await signedInAs(t, "admin", preview.url);
   assert.deepEqual(await (await admin.request.get(api)).json(), { job: null });
@@ -163,7 +166,7 @@ test("collections and favorites persist across sessions and respect team roles",
   await button(member, "Создать").click();
   await button(member, /Личное исследование/).waitFor();
 
-  await button(member, "Поиск видео").click();
+  await button(member, "Каталог видео").click();
   await button(member, `В избранное: ${videoTitle}`).click();
   await button(member, `Убрать из избранного: ${videoTitle}`).waitFor();
   await button(member, videoTitle).click();
@@ -293,7 +296,7 @@ test("saved public videos appear in the team catalog and can join personal and s
   await button(viewer, /Личная медиатека/).waitFor({ state: "hidden" });
   await button(viewer, /Общая медиатека/).click();
   await button(viewer, videoName).waitFor();
-  await button(viewer, "Поиск видео").click();
+  await button(viewer, "Каталог видео").click();
   await viewer.getByLabel("Ключевые слова").fill("СВЕЖИЙ");
   await viewer.getByLabel("Хэштеги").fill("#кофе");
   await viewer.getByLabel("Дата публикации с").fill("2026-11-18");
@@ -448,9 +451,10 @@ test("retired cover and thumbnail endpoints are absent in the team workspace", a
     const authenticated = await page.request.get(url);
     assert.equal(authenticated.status(), 404);
   }
+  await page.getByText("Маршрут на выходные в горах", { exact: true }).waitFor({ state: "hidden" });
   await button(page, videoTitle).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByText("Демонстрационная карточка").waitFor();
+  await dialog.getByText("Демонстрационная карточка").waitFor({ state: "hidden" });
   assert.equal(await dialog.locator("input[type=file], img, iframe").count(), 0);
 });
 
@@ -478,7 +482,7 @@ test("authorized editors can rename a saved video without changing its identity 
   await editor.getByLabel("Название").fill("Общие идеи для съёмки");
   await button(editor, "Создать").click();
   await button(editor, /Общие идеи для съёмки/).waitFor();
-  await button(editor, "Поиск видео").click();
+  await button(editor, "Каталог видео").click();
   await editor.getByLabel("Ключевые слова").fill("KadrEdit002");
   await button(editor, "Найти видео").click();
   await editor.getByText("Найдено: 1", { exact: true }).waitFor();
@@ -656,59 +660,53 @@ test("TikTok errors stay out of grid cards and the original link remains availab
   await card.getByRole("link", { name: "Открыть в TikTok" }).waitFor();
 });
 
-test("bulk search paginates 1000 mock results and keeps notes separate in the browser", { timeout: 45_000 }, async (t) => {
+test("collection never substitutes fake results when the cloud executor is disconnected", { timeout: 30_000 }, async (t) => {
   const page = await signedInAs(t, "member");
-  const externalRequests = [];
-  const pilotPosts = [];
-  page.on("request", (request) => {
-    if (new URL(request.url()).origin !== stack.appUrl) externalRequests.push(request.url());
-    if (request.method() === "POST") pilotPosts.push(request.url());
-  });
   await page.setViewportSize({ width: 390, height: 844 });
-  await button(page, "Массовый поиск").click();
-  await page.getByLabel("Ключевые слова").fill("кофе");
-  await page.getByLabel("Макс. видео").fill("1000");
-  await button(page, "Запустить тестовый поиск").click();
-  await page.getByRole("status").filter({ hasText: /^Найдено: 1000$/ }).waitFor();
-  await page.getByText("Страница 1 из 50").waitFor();
-  await page.getByText(/Обработано страниц: 20/).waitFor();
-  const results = page.getByRole("region", { name: "Результаты пилота" });
-  const first = results.locator("article").first();
-  await first.getByRole("heading", { name: "Демо №1" }).waitFor();
-  assert.equal(await results.locator("article").count(), 20);
-  assert.equal(await results.locator("iframe, img").count(), 0);
-  assert.ok(await results.getByText("Нет данных", { exact: true }).count() > 0);
-
-  await first.getByText("Источник и ссылка", { exact: true }).click();
-  await first.getByText("mock:tiktok", { exact: true }).waitFor();
-  await first.getByText("Заметка", { exact: true }).click();
-  await first.getByLabel("Личная заметка").fill("Это отдельная тестовая заметка");
-  await button(first, "Сохранить заметку").click();
-  await first.getByText("Заметка сохранена.").waitFor();
-  await button(results, "Далее").click();
-  await page.getByText("Страница 2 из 50").waitFor();
-  await first.getByRole("heading", { name: "Название недоступно" }).waitFor();
-  await button(results, "Назад").click();
-  await first.getByRole("heading", { name: "Демо №1" }).waitFor();
-  await first.getByText("Заметка", { exact: true }).click();
-  assert.equal(await first.getByLabel("Личная заметка").inputValue(), "Это отдельная тестовая заметка");
-
-  const snapshot = await page.evaluate(() => {
-    const resultKey = Object.keys(sessionStorage).find((key) => /^kadr\.bulk-pilot.*\.results$/.test(key));
-    const noteKey = Object.keys(localStorage).find((key) => /^kadr\.bulk-pilot.*\.note\./.test(key));
-    const result = JSON.parse(sessionStorage.getItem(resultKey)).result;
-    return { note: localStorage.getItem(noteKey), containsNote: JSON.stringify(result).includes("отдельная тестовая заметка"),
-      title: result.videos[0].originalTitle, chargedMicros: result.chargedMicros, budgetMicros: result.budgetMicros };
-  });
-  assert.deepEqual(snapshot, {
-    note: "Это отдельная тестовая заметка", containsNote: false, title: "Демо №1", chargedMicros: 0, budgetMicros: 0,
-  });
-  await page.reload();
-  await button(page, "Массовый поиск").click();
-  await page.getByRole("status").filter({ hasText: /^Найдено: 1000$/ }).waitFor();
-  await first.getByText("Заметка", { exact: true }).click();
-  assert.equal(await first.getByLabel("Личная заметка").inputValue(), "Это отдельная тестовая заметка");
+  await button(page, "Сбор роликов").click();
+  await page.getByText("Облачный сборщик ещё не подключён", { exact: true }).waitFor();
+  assert.equal(await button(page, "Собрать ролики").isDisabled(), true);
+  assert.equal(await page.getByText("Запустить тестовый поиск", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Демо №1", { exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
-  assert.deepEqual(externalRequests, []);
-  assert.deepEqual(pilotPosts, []);
+});
+
+// Real requests to the existing isolated database; browser-source responses are
+// explicitly recorded test data. This does not claim live Instagram/TikTok access.
+test("collection UI polls an asynchronous job, displays its counters and saves metadata in the shared catalog", { timeout: 45_000 }, async (t) => {
+  const fixture = createServer((_request, response) => response.end('<h1>Fixture</h1>'));
+  fixture.listen(0, "127.0.0.1"); await once(fixture, "listening");
+  t.after(() => { fixture.close(); fixture.closeAllConnections(); });
+  const preview = cloudPreview ?? await stack.startCloudBrowser(`http://127.0.0.1:${fixture.address().port}/catalog`);
+  const page = await signedInAs(t, "member", preview.url);
+  const video = { platform: "tiktok", externalId: "7412345678901234599", url: "https://www.tiktok.com/@reviewer/video/7412345678901234599",
+    source: "fashion-radar-browser", fetchedAt: new Date().toISOString(), author: "reviewer", originalTitle: null,
+    originalDescription: "Тест сохранения облачного сбора", publishedAt: "2026-11-20T12:00:00.000Z",
+    views: 0, likes: 12, comments: 3, hashtags: ["находки"] };
+  let job = null, polls = 0, submitted;
+  await page.route("**/api/cloud-browser", async route => {
+    if (route.request().method() === "POST") {
+      submitted = route.request().postDataJSON();
+      job = { id: crypto.randomUUID(), state: "pending", keywords: submitted.keywords, records: [] };
+      return route.fulfill({ status: 202, json: { job } });
+    }
+    if (job && ++polls >= 2) job = { ...job, state: "completed", videos: [video], scanned: 1, limited: true };
+    return route.fulfill({ json: { job } });
+  });
+  await button(page, "Сбор роликов").click();
+  await page.getByLabel("Хэштег или ключевые слова").fill("находки");
+  await page.getByLabel("Дата публикации").selectOption("0");
+  await button(page, "Собрать ролики").click();
+  const results = page.getByRole("region", { name: "Собранные ролики" });
+  await results.getByRole("heading", { name: video.originalDescription }).waitFor();
+  assert.equal(submitted.platform, "tiktok"); assert.equal(submitted.searchMode, "hashtag");
+  await results.getByText("0", { exact: true }).waitFor();
+  await results.getByText("3", { exact: true }).waitFor();
+  assert.equal(await results.getByRole("link", { name: "Открыть оригинал" }).getAttribute("href"), video.url);
+  await button(results, "Сохранить в каталог команды").click();
+  await button(results, "В каталоге команды").waitFor();
+  const response = await stack.restAs("viewer", `videos?select=views,likes,description,is_mock&external_id=eq.${video.externalId}`);
+  const [saved] = await response.json();
+  assert.equal(saved.views, 0); assert.equal(saved.likes, 12); assert.equal(saved.description, video.originalDescription);
+  assert.equal(saved.is_mock, false);
 });

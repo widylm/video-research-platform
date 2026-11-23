@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { cloudBrowserQuery, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
+import { cloudBrowserQuery, fashionRadarQuery, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
 import { storeObservations } from "./catalog.ts";
 import { browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
+import { runFashionRadar } from "./fashion-radar.ts";
 
 interface Transaction {
   get<T>(key: string): Promise<T | undefined>;
@@ -33,7 +34,8 @@ const cooldownMs = 20_000;
 const jobKey = (id: string) => `job:${id}`;
 const userKey = (user: string) => `user:${user}`;
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const publicJob = ({ id, state, keywords, records, error }: StoredJob): CloudBrowserJob => ({ id, state, keywords, records, error });
+const publicJob = ({ id, state, keywords, records, videos, scanned, limited, error }: StoredJob): CloudBrowserJob =>
+  ({ id, state, keywords, records, videos, scanned, limited, error });
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 export function reserveBudget(previous: Budget | undefined, now: number): Budget | null {
@@ -59,10 +61,11 @@ export class CloudBrowserJobs {
       return json({ job: job ? publicJob(job) : null });
     }
     if (request.method !== "POST") return json({ error: "invalid_query" }, 405);
-    if (!this.env.BROWSER || !neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL)) {
+    const fashionRadar = this.env.KADR_BROWSER_SOURCE === "fashion-radar";
+    if (!this.env.BROWSER || (!fashionRadar && !neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL))) {
       return json({ error: "source_unavailable" }, 503);
     }
-    const query = cloudBrowserQuery.safeParse(await request.json().catch(() => null));
+    const query = (fashionRadar ? fashionRadarQuery : cloudBrowserQuery).safeParse(await request.json().catch(() => null));
     if (!query.success) return json({ error: "invalid_query" }, 400);
 
     return storage.transaction(async (transaction) => {
@@ -121,7 +124,13 @@ export class CloudBrowserJobs {
     const url = neutralSourceUrl(this.env.KADR_BROWSER_SOURCE, this.env.KADR_BROWSER_SOURCE_URL);
     let result: StoredJob;
     try {
-      if (!this.env.BROWSER || !url) result = { ...running, state: "failed", error: "source_unavailable" };
+      if (this.env.BROWSER && this.env.KADR_BROWSER_SOURCE === "fashion-radar") {
+        const collection = await runFashionRadar(this.env.BROWSER, fashionRadarQuery.parse(running.query),
+          promise => this.state.waitUntil(promise));
+        result = { ...running, state: "completed", records: [], videos: collection.videos,
+          scanned: collection.scanned, limited: collection.limited, error: collection.warning };
+      }
+      else if (!this.env.BROWSER || !url) result = { ...running, state: "failed", error: "source_unavailable" };
       else {
         const records = await runNeutralBrowser(this.env.BROWSER, url, running.query, (promise) => this.state.waitUntil(promise));
         result = { ...running, state: "completed", records: [...records] };
