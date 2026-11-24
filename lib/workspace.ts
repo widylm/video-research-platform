@@ -48,7 +48,7 @@ export async function searchCatalog(supabase: Supabase, query: SearchQuery): Pro
     p_min_likes: query.minLikes,
     p_sort: query.sort,
     p_limit: query.limit,
-  }).select(videoColumns).returns<VideoRow[]>();
+  }).select(videoColumns).eq("is_mock", false).returns<VideoRow[]>();
   if (error) throw error;
   if (!Array.isArray(data)) throw new Error("Unexpected catalog response.");
   return data.map(toVideo);

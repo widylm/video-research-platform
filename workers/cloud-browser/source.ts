@@ -1,6 +1,6 @@
 import puppeteer, { type Browser, type Page } from "@cloudflare/puppeteer";
 import { z } from "zod";
-import type { BrowserSource, CloudBrowserErrorCode, CloudBrowserRecord } from "../../lib/cloud-browser-contract.ts";
+import type { BrowserSource, CloudBrowserDiagnostics, CloudBrowserErrorCode, CloudBrowserRecord } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
 
 export type BrowserBinding = Parameters<typeof puppeteer.launch>[0];
@@ -9,7 +9,10 @@ const localFetchTimeout = 45_000; // Wrangler may install Chromium on the first 
 
 export class BrowserJobError extends Error {
   readonly code: CloudBrowserErrorCode;
-  constructor(code: CloudBrowserErrorCode) { super(code); this.code = code; }
+  readonly diagnostics?: CloudBrowserDiagnostics;
+  constructor(code: CloudBrowserErrorCode, diagnostics?: CloudBrowserDiagnostics) {
+    super(code); this.code = code; this.diagnostics = diagnostics;
+  }
 }
 
 export function neutralSourceUrl(mode?: string, configuredUrl?: string): string | null {

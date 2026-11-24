@@ -11,16 +11,15 @@ import type { Profile } from "@/lib/supabase";
 import { defaultSearch, sortVideos, type SearchQuery, type Sort, type Video } from "@/lib/videos";
 import { AddVideoDialog } from "./add-video-dialog";
 import { Brand } from "./brand";
-import { BulkSearchPilot } from "./bulk-search-pilot";
-import { CloudBrowserSearch } from "./cloud-browser-search";
+import { CollectorSearch } from "./collector-search";
 import { Collections } from "./collections";
 import { SearchForm } from "./search-form";
 import { VideoDialog } from "./video-dialog";
 import { VideoResults } from "./video-results";
 
 const sections = {
-  search: { label: "Поиск видео", icon: Search, subtitle: "Исследуйте демонстрационные карточки коротких видео для TikTok и Instagram." },
-  pilot: { label: "Массовый поиск", icon: FlaskConical, subtitle: "Проверьте пакетный поиск TikTok и Instagram Reels на тестовых данных." },
+  search: { label: "Каталог видео", icon: Search, subtitle: "Демонстрационный каталог: примеры интерфейса, без сбора из соцсетей." },
+  pilot: { label: "Сбор роликов", icon: Search, subtitle: "Получайте новые ролики TikTok и Instagram через облачный Fashion Radar." },
   favorites: { label: "Избранное", icon: Heart, subtitle: "Личная подборка видео, которые вы сохранили." },
   collections: { label: "Коллекции", icon: Folder, subtitle: "Собирайте видео по темам и делитесь подборками с командой." },
 } as const;
@@ -223,8 +222,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
             <h1>{title}</h1>
             <p>{activeCollection ? (activeCollection.shared ? "Коллекция для команды" : "Личная коллекция")
               : section === "search" && profile ? "Ищите видео, сохранённые в каталоге команды."
-                : section === "pilot" && cloudBrowserSearch ? "Проверьте облачный поиск на разрешённом тестовом источнике."
-                  : sections[section].subtitle}</p>
+                : sections[section].subtitle}</p>
           </div>
           {profile && canEdit && section !== "pilot" && <button className="button primary" type="button" disabled={sessionBusy}
             onClick={() => setAdding(true)}><Plus size={18} /> Добавить видео</button>}
@@ -238,8 +236,7 @@ export function Dashboard({ initialVideos, initialLibrary, profile, cloudBrowser
           }}
         />}
 
-        {section === "pilot" && (cloudBrowserSearch ? <CloudBrowserSearch />
-          : <BulkSearchPilot key={profile?.id ?? "demo"} profileId={profile?.id} />)}
+        {section === "pilot" && <CollectorSearch enabled={!!cloudBrowserSearch} canCollect={!!profile && canEdit} />}
 
         {section === "collections" && <Collections
           collections={library.collections} active={activeCollection} canEdit={canEdit}

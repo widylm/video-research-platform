@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "video-research-platform",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-11-18",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": { "binding": "ASSETS", "directory": ".open-next/assets" },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "video-research-platform" },
+    { "binding": "KADR_BROWSER_EXECUTOR", "service": "kadr-fashion-radar-executor" }
+  ],
+  "observability": { "enabled": false }
+}

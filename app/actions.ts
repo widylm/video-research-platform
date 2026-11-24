@@ -8,6 +8,7 @@ import { currentProfile, serverSupabase } from "@/lib/supabase";
 import { videoDetailsSchema, videoEntrySchema } from "@/lib/video-entry";
 import { platformVideoTitle, searchSchema, type Video } from "@/lib/videos";
 import { changeLibrary, readLibrary, searchCatalog, toVideo, videoColumns, workspace, type SavedVideoRow, type VideoRow } from "@/lib/workspace";
+import { bulkVideoSchema } from "@/lib/bulk-search";
 
 type ActionResult<T> = { data: T } | { error: string };
 const authError = { error: "Войдите в аккаунт команды, чтобы продолжить." };
@@ -74,6 +75,22 @@ export async function savePublicVideo(input: unknown): Promise<ActionResult<{ vi
   } catch {
     return { error: "Не удалось сохранить видео. Попробуйте ещё раз." };
   }
+}
+
+export async function saveCollectedVideo(input: unknown): Promise<ActionResult<{ video: Video; created: boolean }>> {
+  const parsed = bulkVideoSchema.safeParse(input);
+  if (!parsed.success || !parsed.data.url || parsed.data.source !== "fashion-radar-browser") {
+    return { error: "Не удалось проверить собранный ролик." };
+  }
+  const video = parsed.data;
+  return savePublicVideo({
+    url: video.url, title: Array.from(video.originalTitle ?? "").slice(0, 120).join(""),
+    description: Array.from(video.originalDescription ?? "").slice(0, 2200).join(""),
+    publishedAt: video.publishedAt?.slice(0, 10) ?? "",
+    hashtags: (video.hashtags ?? []).filter(tag => /^[\p{L}\p{M}\p{N}_]{1,64}$/u.test(tag)).slice(0, 30).join(" "),
+    views: video.views === null ? "" : String(video.views), likes: video.likes === null ? "" : String(video.likes),
+    collectionId: "",
+  });
 }
 
 export async function updateVideoDetails(input: unknown): Promise<ActionResult<Video>> {
