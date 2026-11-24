@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { cloudBrowserQuery, fashionRadarQuery, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
+import { cloudBrowserQuery, fashionRadarQuery, safeVerificationUrl, type CloudBrowserJob } from "../../lib/cloud-browser-contract.ts";
 import type { BulkQuery } from "../../lib/bulk-search.ts";
 import { storeObservations } from "./catalog.ts";
 import { BrowserJobError, browserErrorCode, neutralSourceUrl, runNeutralBrowser, type BrowserBinding } from "./source.ts";
@@ -34,8 +34,10 @@ const cooldownMs = 20_000;
 const jobKey = (id: string) => `job:${id}`;
 const userKey = (user: string) => `user:${user}`;
 const json = (body: object, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const publicJob = ({ id, state, keywords, records, videos, scanned, limited, error, diagnostics }: StoredJob): CloudBrowserJob =>
-  ({ id, state, keywords, records, videos, scanned, limited, error, diagnostics });
+const publicJob = ({ id, state, keywords, records, videos, scanned, limited, error, diagnostics, verification }: StoredJob): CloudBrowserJob =>
+  ({ id, state, keywords, records, videos, scanned, limited, error, diagnostics,
+    verification: state === "awaiting_verification" && verification && Date.parse(verification.expiresAt) > Date.now()
+      && safeVerificationUrl(verification.url) ? verification : undefined });
 const utcDay = (now: number) => new Date(now).toISOString().slice(0, 10);
 
 export function reserveBudget(previous: Budget | undefined, now: number): Budget | null {
@@ -45,11 +47,22 @@ export function reserveBudget(previous: Budget | undefined, now: number): Budget
   return { day, requests: used.requests + 1, reservedMs: used.reservedMs + reservationMs };
 }
 
+export function reserveVerificationBudget(previous: Budget | undefined, now: number): Budget | null {
+  const day = utcDay(now);
+  // A normal job already reserved one minute. A manual check needs two more.
+  const used = previous?.day === day ? previous : { day, requests: 1, reservedMs: reservationMs };
+  if (used.reservedMs + 2 * reservationMs > maxReservedMs) return null;
+  return { ...used, reservedMs: used.reservedMs + 2 * reservationMs };
+}
+
 export class CloudBrowserJobs {
   private readonly state: State;
   private readonly env: Env;
+  private readonly collect: typeof runFashionRadar;
 
-  constructor(state: State, env: Env) { this.state = state; this.env = env; }
+  constructor(state: State, env: Env, collect: typeof runFashionRadar = runFashionRadar) {
+    this.state = state; this.env = env; this.collect = collect;
+  }
 
   async fetch(request: Request) {
     const user = z.uuid().safeParse(request.headers.get("x-kadr-profile"));
@@ -99,7 +112,9 @@ export class CloudBrowserJobs {
       const job = await transaction.get<StoredJob>(jobKey(id));
       if (!job || job.state !== "pending") {
         // A watchdog or platform retry after a restart must not launch a second browser.
-        if (job?.state === "running") await transaction.put(jobKey(id), { ...job, state: "failed", error: "interrupted" });
+        if (job?.state === "running" || job?.state === "awaiting_verification") {
+          await transaction.put(jobKey(id), { ...job, state: "failed", error: "interrupted", verification: undefined });
+        }
         await transaction.delete(slot);
         return null;
       }
@@ -125,8 +140,28 @@ export class CloudBrowserJobs {
     let result: StoredJob;
     try {
       if (this.env.BROWSER && this.env.KADR_BROWSER_SOURCE === "fashion-radar") {
-        const collection = await runFashionRadar(this.env.BROWSER, fashionRadarQuery.parse(running.query),
-          promise => this.state.waitUntil(promise));
+        const update = (change: Partial<StoredJob>) => storage.transaction(async transaction => {
+          if (await transaction.get<string>(slot) !== running.id) throw new BrowserJobError("interrupted");
+          const current = await transaction.get<StoredJob>(jobKey(running.id));
+          if (!current) throw new BrowserJobError("interrupted");
+          await transaction.put(jobKey(running.id), { ...current, ...change });
+        });
+        const collection = await this.collect(this.env.BROWSER, fashionRadarQuery.parse(running.query),
+          promise => this.state.waitUntil(promise), {
+            reserve: () => storage.transaction(async transaction => {
+              if (await transaction.get<string>(slot) !== running.id) throw new BrowserJobError("interrupted");
+              const now = Date.now();
+              const budget = reserveVerificationBudget(await transaction.get<Budget>(budgetKey), now);
+              if (!budget) throw new BrowserJobError("budget_exhausted");
+              await transaction.put(budgetKey, budget);
+              await transaction.setAlarm(now + 3 * reservationMs);
+            }),
+            publish: async (verification, diagnostics) => {
+              if (!safeVerificationUrl(verification.url)) throw new BrowserJobError("verification_unavailable");
+              await update({ state: "awaiting_verification", verification, diagnostics, error: "manual_intervention_required" });
+            },
+            resumed: () => update({ state: "running", verification: undefined, diagnostics: undefined, error: undefined }),
+          });
         result = { ...running, state: "completed", records: [], videos: collection.videos,
           scanned: collection.scanned, limited: collection.limited, error: collection.warning };
       }

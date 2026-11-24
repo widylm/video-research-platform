@@ -48,6 +48,8 @@ test('page scripts and GraphQL POST requests can load while private targets and 
   for (const href of ['https://127.0.0.1/private', 'https://instagram.com.evil.example/script', 'http://www.instagram.com/script',
     'https://user:password@www.instagram.com/script', 'https://www.instagram.com:444/script']) assert.equal(allowed(href), false);
   assert.equal(allowed('https://cdninstagram.com/file.mp4', 'GET', 'media'), false);
+  assert.equal(allowed('https://static.cdninstagram.com/verification.png', 'GET', 'image'), true);
+  assert.equal(allowed('https://unknown.example/verification.png', 'GET', 'image'), false);
   assert.equal(allowed('https://www.tiktok.com/tag/test', 'GET', 'document', true), false);
   assert.equal(responseIsMetadata('https://www.tiktok.com/api/challenge/item_list/', 'tiktok'), true);
   assert.equal(responseIsMetadata('https://www.tiktok.com/api/search/item/full/', 'instagram'), false);
@@ -128,7 +130,7 @@ test('a failed load includes bounded diagnostics without recording request URLs,
   await assert.rejects(collectFashionRadar(page, query, { now: () => clock, pause: async ms => { clock += ms; } }), error => {
     assert.equal(error.code, 'source_not_ready');
     assert.deepEqual(error.diagnostics, { navigationStatus: 200, pageTitle: 'TikTok', elapsedMs: 16_000,
-      visibleLinks: 0, metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: ['unknown.example'], apiResponses: [] });
+      visibleLinks: 0, metadataResponses: 0, metadataItems: 0, failedRequests: 0, blockedHosts: ['unknown.example'], apiResponses: [], challengeVisible: false });
     assert.ok(!JSON.stringify(error.diagnostics).includes('secret'));
     assert.ok(!JSON.stringify(error.diagnostics).includes('public page text'));
     return true;
@@ -166,6 +168,31 @@ test('login, human verification and an unloaded page are errors rather than a fa
     await assert.rejects(collectFashionRadar(fakePage(() => state), query, { pause: async () => {} }), error => error.code === code);
   }
   assert.equal(pageProblem('instagram', { url: 'https://www.instagram.com/accounts/login/', text: '', links: [] }), 'source_login_required');
+});
+
+test('a manual check resumes the same requested search without consuming its collection deadline', async () => {
+  let clock = 0, verified = false, handoffs = 0;
+  const page = fakePage(() => ({ challenge: !verified, links: verified ? [url] : [] }), true);
+  const result = await collectFashionRadar(page, { ...query, limit: 1 }, {
+    now: () => clock, pause: async ms => { clock += ms; },
+    onVerification: async (activePage, diagnostics) => {
+      assert.equal(diagnostics.challengeVisible, true);
+      handoffs += 1; clock += 90_000; verified = true;
+      await activePage.goto('https://www.tiktok.com/');
+    },
+  });
+  assert.equal(handoffs, 1); assert.equal(result.videos[0].url, url);
+  assert.equal(page.url(), discoveryUrl(query.platform, query.keywords));
+  assert.ok(clock >= 90_000);
+});
+
+test('Done never bypasses a still-visible verification or creates an endless handoff loop', async () => {
+  let handoffs = 0;
+  await assert.rejects(collectFashionRadar(fakePage(() => ({ challenge: true }), false), query, {
+    pause: async () => {}, onVerification: async () => { handoffs += 1; },
+  }), error => error.code === 'manual_intervention_required');
+  assert.equal(handoffs, 1);
+  assert.equal(pageProblem('tiktok', { url, title: 'TikTok', text: 'A video about captcha design', links: [url], challenge: false }), null);
 });
 
 test('the real executor accepts collection queries without a provider key and queues them outside the user browser', async () => {

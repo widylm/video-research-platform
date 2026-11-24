@@ -4,6 +4,8 @@ import type { CloudBrowserApiResponse, CloudBrowserDiagnostics, CloudBrowserErro
 import { parseVideoLink } from "../../lib/public-video-url.ts";
 import { BrowserJobError, withDeadline, type BrowserBinding } from "./source.ts";
 import { discoveryUrl, explicitlyEmpty, extractMetadata, filterCollected, mergeMetadata, pageProblem } from "./fashion-radar/metadata.mjs";
+import { readFashionRadarPage } from "./page-state.ts";
+import { requestHumanVerification, verificationScreenshot, type VerificationHooks } from "./verification.ts";
 
 const totalTime = 45_000;
 const maxPayload = 2_000_000;
@@ -24,7 +26,7 @@ export function allowedBrowserResource(raw: string, navigation: boolean, origin:
   const url = new URL(raw);
   if (url.protocol !== "https:" || url.username || url.password || url.port || !["GET", "POST"].includes(method)) return false;
   if (navigation) return method === "GET" && url.origin === origin;
-  return !["image", "media", "font"].includes(type)
+  return !["media", "font"].includes(type)
     && (resourceHosts.some(host => url.hostname === host || url.hostname.endsWith(`.${host}`))
       || origin === "https://www.tiktok.com" && tiktokServiceHosts.has(url.hostname));
 }
@@ -38,13 +40,14 @@ export function responseIsMetadata(raw: string, platform: FashionRadarQuery["pla
 }
 
 export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
-  options: { pause?: (ms: number) => Promise<void>; now?: () => number } = {}) {
+  options: { pause?: (ms: number) => Promise<void>; now?: () => number;
+    onVerification?: (page: Page, diagnostics: CloudBrowserDiagnostics) => Promise<void> } = {}) {
   const url = discoveryUrl(query.platform, query.keywords, query.searchMode);
   if (!url) throw new BrowserJobError("invalid_query");
   const now = options.now ?? Date.now;
   const pause = options.pause ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const startedAt = now();
-  const deadline = startedAt + 35_000;
+  let deadline = startedAt + 35_000;
   const origin = new URL(url).origin;
   const rows = new Map<string, BulkVideo>();
   const visible = new Map<string, string>();
@@ -57,10 +60,12 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   let failedRequests = 0;
   const blockedHosts = new Set<string>();
   const apiResponses: CloudBrowserApiResponse[] = [];
+  let challengeVisible = false;
+  let assisted = false;
   const diagnostics = (): CloudBrowserDiagnostics => ({ navigationStatus, pageTitle,
     elapsedMs: Math.max(0, now() - startedAt), visibleLinks: visible.size,
     metadataResponses: responses, metadataItems: rows.size, failedRequests, blockedHosts: [...blockedHosts],
-    apiResponses: apiResponses.map(response => ({ ...response })) });
+    apiResponses: apiResponses.map(response => ({ ...response })), challengeVisible });
   const fail = (code: CloudBrowserErrorCode): never => { throw new BrowserJobError(code, diagnostics()); };
   const add = (data: unknown) => {
     let count = 0;
@@ -129,17 +134,27 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
   for (let step = 0; step < 8 && now() < deadline && !rateLimited; step += 1) {
     // Give JavaScript and normal cross-origin API requests time to populate the page.
     await pause(2_000);
-    const state = await page.evaluate(() => ({
-      url: location.href, title: document.title,
-      text: (document.body?.innerText ?? "").slice(0, 4_000),
-      challenge: !!document.querySelector('iframe[src*="captcha"], [data-challenge="captcha"], #challenge-running'),
-      links: [...document.querySelectorAll<HTMLAnchorElement>('a[href*="/video/"],a[href*="/reel/"],a[href*="/reels/"],a[href*="/p/"]')]
-        .filter(node => node.getClientRects().length > 0).slice(0, 200).map(node => node.href),
-      hydration: [...document.querySelectorAll('script[type="application/json"],script#__UNIVERSAL_DATA_FOR_REHYDRATION__,script#SIGI_STATE')]
-        .slice(0, 12).map(node => node.textContent ?? "").filter(text => text.length < 1_000_000),
-    }));
+    const state = await page.evaluate(readFashionRadarPage);
     pageTitle = state.title.slice(0, 160);
+    challengeVisible = state.challenge;
     const problem = pageProblem(query.platform, state);
+    if (problem === "manual_intervention_required" && options.onVerification && !assisted) {
+      assisted = true;
+      const pausedAt = now();
+      await options.onVerification(page, diagnostics());
+      deadline += now() - pausedAt;
+      // A human may finish on the home/login page. Resume the requested search,
+      // rather than treating an unrelated feed as matching the user's query.
+      if (page.url() !== url) {
+        const resumed = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 12_000 });
+        if (!resumed) fail("source_not_ready");
+        if (resumed?.status() === 429) fail("source_rate_limited");
+        if (resumed?.status() === 401) fail("source_login_required");
+        if (!resumed?.ok()) fail("source_denied");
+      }
+      unchanged = 0;
+      continue;
+    }
     if (problem) fail(problem);
     empty = explicitlyEmpty(state.text);
     const before = visible.size;
@@ -211,17 +226,38 @@ export async function collectFashionRadar(page: Page, query: FashionRadarQuery,
 }
 
 export async function runFashionRadar(binding: BrowserBinding, query: FashionRadarQuery,
-  cleanup: (operation: Promise<unknown>) => void) {
+  cleanup: (operation: Promise<unknown>) => void, verification?: VerificationHooks) {
   let browser: Browser | undefined;
   let expired = false;
-  const launch = puppeteer.launch(binding, { keep_alive: 30_000 });
+  const launch = puppeteer.launch(binding, { keep_alive: 30_000,
+    guardrails: verification ? { allowedDomains: resourceHosts.flatMap(host => [host, `*.${host}`]).concat([...tiktokServiceHosts]) } : undefined });
   const close = (session: Browser) => withDeadline(session.close(), 2_000).catch(() => {});
   try {
     return await withDeadline((async () => {
       browser = await launch;
       if (expired) throw new BrowserJobError("timed_out");
-      return collectFashionRadar(await browser.newPage(), query);
-    })(), totalTime);
+      const page = await browser.newPage();
+      let humanAttempted = false;
+      let screenshot: string | undefined;
+      try {
+        return await collectFashionRadar(page, query, { onVerification: verification ? async (page, diagnostics) => {
+          // Only capture the initial, fresh guest page, before the user can type.
+          screenshot = await verificationScreenshot(page);
+          humanAttempted = true;
+          await requestHumanVerification(page, { ...diagnostics, screenshot }, verification);
+        } : undefined });
+      } catch (error) {
+        if (error instanceof BrowserJobError && error.diagnostics) {
+          if (!humanAttempted && ["manual_intervention_required", "source_not_ready"].includes(error.code)) {
+            screenshot = await verificationScreenshot(page);
+          }
+          if (screenshot && !error.diagnostics.screenshot) {
+            throw new BrowserJobError(error.code, { ...error.diagnostics, screenshot });
+          }
+        }
+        throw error;
+      }
+    })(), verification ? 170_000 : totalTime);
   } finally {
     expired = true;
     if (browser) await close(browser);

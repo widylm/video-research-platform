@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Image from "next/image";
 import { Search, RefreshCw } from "lucide-react";
 import { saveCollectedVideo } from "@/app/actions";
-import { cloudBrowserErrors, cloudBrowserUrl, type CloudBrowserJob, type FashionRadarQuery } from "@/lib/cloud-browser-contract";
+import { browserJobActive, safeVerificationUrl, cloudBrowserErrors, cloudBrowserUrl, type CloudBrowserJob, type FashionRadarQuery } from "@/lib/cloud-browser-contract";
 import type { BulkVideo } from "@/lib/bulk-search";
 import { PlatformBadge } from "./video-results";
 
-const status = { pending: "Поиск в очереди", running: "Собираем ролики со страницы соцсети", completed: "Сбор завершён", failed: "Сбор остановлен" };
+const status = { pending: "Поиск в очереди", running: "Собираем ролики со страницы соцсети", awaiting_verification: "Нужна проверка человеком", completed: "Сбор завершён", failed: "Сбор остановлен" };
 const number = new Intl.NumberFormat("ru-RU");
 const date = new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeZone: "UTC" });
 const describe = (code?: string) => code && code in cloudBrowserErrors
@@ -23,7 +24,7 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
   const [revision, setRevision] = useState(0);
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<Record<string, string>>({});
-  const active = job?.state === "pending" || job?.state === "running";
+  const active = browserJobActive(job?.state);
 
   useEffect(() => {
     if (!enabled || !canCollect) return;
@@ -39,7 +40,7 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
         failures = 0;
         setError("");
         setJob(data.job);
-        if (data.job?.state === "pending" || data.job?.state === "running") timer = setTimeout(poll, 1500);
+        if (browserJobActive(data.job?.state)) timer = setTimeout(poll, 1500);
       } catch (error) {
         if (controller.signal.aborted) return;
         setError(error instanceof Error ? error.message : describe());
@@ -87,6 +88,9 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
   }
 
   const videos = job?.videos ?? [];
+  const verificationUrl = job?.state === "awaiting_verification" && job.verification
+    && Date.parse(job.verification.expiresAt) > Date.now() ? safeVerificationUrl(job.verification.url) : null;
+  const screenshot = job?.diagnostics?.screenshot;
   return <>
     {!enabled && <div className="panel empty-state" role="status">
       <strong>Облачный сборщик ещё не подключён</strong>
@@ -114,6 +118,7 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
           disabled={!enabled || !canCollect || active || loading} /></label>
       </div>
       <p className="field-hint">Даты проверяются у найденных роликов. Это выборка доступной выдачи; полный охват соцсети не гарантируется.</p>
+      <p className="field-hint">Если появится проверка на человека, её можно пройти в облачном окне. Ожидание до двух минут расходует дополнительный лимит браузера.</p>
       <div className="pilot-actions"><span>Реальные данные · до 50 роликов · ограничение времени и запусков</span>
         <button className="button primary" type="submit" disabled={!enabled || !canCollect || restoring || active || loading}>
           <Search size={16} />{loading ? "Запускаем…" : active ? "Собираем…" : "Собрать ролики"}
@@ -127,6 +132,14 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
     {job && <section className="results-section" aria-label="Собранные ролики">
       <p role="status">{status[job.state]} · {job.keywords}{job.state === "completed" ? ` · Найдено: ${videos.length} · Проверено ссылок: ${job.scanned ?? 0}` : ""}</p>
       {job.error && <p className="notice error" role="alert">{describe(job.error)}</p>}
+      {job.state === "awaiting_verification" && <div className="panel empty-state" role="status">
+        {verificationUrl ? <>
+          <strong>Откройте облачное окно и пройдите проверку</strong>
+          <p>Это тот же облачный браузер, который собирает ролики. После проверки нажмите <b>Done / Готово</b> в открывшемся окне. Сбор продолжится автоматически.</p>
+          <p>Окно доступно до {new Date(job.verification!.expiresAt).toLocaleTimeString("ru-RU")}. Ссылка даёт временный доступ к вашему браузеру; не пересылайте её.</p>
+          <a className="button primary" href={verificationUrl} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">Открыть окно проверки</a>
+        </> : <p>Время доступа к окну истекло. Дождитесь завершения задания и запустите новый сбор.</p>}
+      </div>}
       {job.error && job.diagnostics && <details className="panel">
         <summary>Подробности сбоя — можно прислать для проверки</summary>
         <p>Код: {job.error}. Статус страницы: {job.diagnostics.navigationStatus ?? "не получен"}.
@@ -137,6 +150,11 @@ export function CollectorSearch({ enabled, canCollect }: { enabled: boolean; can
         {!!job.diagnostics.blockedHosts.length && <p>Заблокированные сборщиком домены: {job.diagnostics.blockedHosts.join(", ")}</p>}
         {!!job.diagnostics.apiResponses?.length && <p>Ответы соцсети: {job.diagnostics.apiResponses.map(response =>
           `HTTP ${response.httpStatus}, код ${response.apiCode ?? "не указан"}, ${responseFormats[response.format]}, роликов ${response.items}`).join("; ")}</p>}
+        {job.diagnostics.challengeVisible !== undefined && <p>Видимое окно проверки: {job.diagnostics.challengeVisible ? "да" : "нет"}.</p>}
+        {typeof screenshot === "string" && screenshot.length <= 80_024 && screenshot.startsWith("data:image/jpeg;base64,") && <>
+          <p>Снимок до ручного ввода. Это изображение для диагностики; нажимать на него для прохождения проверки не нужно.</p>
+          <Image src={screenshot} alt="Страница соцсети в облачном браузере до ручного ввода" width={800} height={600} unoptimized style={{ maxWidth: "100%", height: "auto" }} />
+        </>}
       </details>}
       {job.state === "completed" && job.videos === undefined && <p className="notice error">Подключён тестовый исполнитель. Для сбора роликов требуется исполнитель Fashion Radar.</p>}
       {job.state === "completed" && job.videos !== undefined && !videos.length && <p className="panel empty-state">

@@ -2,10 +2,10 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Search } from "lucide-react";
-import { cloudBrowserErrors, cloudBrowserUrl, type CloudBrowserErrorCode, type CloudBrowserJob } from "@/lib/cloud-browser-contract";
+import { browserJobActive, cloudBrowserErrors, cloudBrowserUrl, type CloudBrowserErrorCode, type CloudBrowserJob } from "@/lib/cloud-browser-contract";
 import type { BulkQuery } from "@/lib/bulk-search";
 
-const status = { pending: "В очереди", running: "Браузер выполняет поиск", completed: "Проверка завершена", failed: "Проверка не завершилась" };
+const status = { pending: "В очереди", running: "Браузер выполняет поиск", awaiting_verification: "Ожидает ручной проверки", completed: "Проверка завершена", failed: "Проверка не завершилась" };
 const describe = (code?: CloudBrowserErrorCode) => (code && cloudBrowserErrors[code]) || cloudBrowserErrors.unavailable;
 
 export function CloudBrowserSearch() {
@@ -13,7 +13,7 @@ export function CloudBrowserSearch() {
   const [ready, setReady] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
-  const active = job?.state === "pending" || job?.state === "running";
+  const active = browserJobActive(job?.state);
   const busy = !ready || starting || active;
 
   useEffect(() => {

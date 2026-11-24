@@ -63,7 +63,8 @@ export function mergeMetadata(previous, next) {
 }
 
 export function pageProblem(platform, page) {
-  if (/captcha|verify you are human|security check|подтвердите.{0,20}(человек|личность)/i.test(`${page.title ?? ''} ${page.text}`)
+  if (/captcha|security check|verify you are human/i.test(page.title ?? '')
+    || /verify you are human|security check|(?:complete|solve) (?:the )?captcha|подтвердите.{0,20}(человек|личность)/i.test(page.text)
     || /\/(challenge|checkpoint)\//.test(page.url) || page.challenge) return 'manual_intervention_required';
   if (/\/(?:accounts\/)?(?:login|sign-in)(\/|\?|$)/.test(page.url)) return 'source_login_required';
   const problem = platform === 'instagram' ? instagramIssue(page) : pageIssue(page.text, page.links.length);

@@ -40,7 +40,10 @@ export const cloudBrowserErrors = {
   browser_quota: "Cloudflare ограничил запуск браузера. Проверьте квоту Browser Run.",
   browser_error: "Не удалось запустить браузер или получить данные.",
   source_denied: "Источник отказал облачному браузеру в доступе.",
-  manual_intervention_required: "Источник требует ручной проверки. Поиск остановлен.",
+  manual_intervention_required: "Соцсеть требует ручной проверки.",
+  verification_unavailable: "Не удалось открыть облачное окно проверки. Подробности и снимок страницы доступны ниже.",
+  verification_expired: "Время ручной проверки истекло. Запустите новый сбор, когда будете готовы открыть окно проверки.",
+  verification_failed: "Ручная проверка не завершена. Сбор остановлен.",
   timed_out: "Облачный браузер не успел завершить поиск.",
   interrupted: "Выполнение было прервано. Запустите поиск снова.",
   source_login_required: "Соцсеть требует вход. Облачный браузер не использует вход из Chrome на вашем компьютере.",
@@ -66,11 +69,35 @@ export interface CloudBrowserDiagnostics {
   failedRequests: number;
   blockedHosts: string[];
   apiResponses?: CloudBrowserApiResponse[];
+  challengeVisible?: boolean;
+  screenshot?: string;
+}
+
+export interface CloudBrowserVerification {
+  url: string;
+  expiresAt: string;
+}
+
+export function safeVerificationUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > 16_000 || !URL.canParse(raw)) return null;
+  const url = new URL(raw);
+  const socket = url.searchParams.get("wss") ?? "";
+  const socketUrl = socket.startsWith("wss://") ? socket : `wss://${socket}`;
+  if (!URL.canParse(socketUrl)) return null;
+  const target = new URL(socketUrl);
+  return url.protocol === "https:" && url.hostname === "live.browser.run" && !url.port && !url.username && !url.password && !url.hash
+    && ["/ui/view", "/ui/inspector"].includes(url.pathname) && target.protocol === "wss:"
+    && target.hostname === "live.browser.run" && !target.port && !target.username && !target.password
+    && target.pathname.startsWith("/api/devtools/browser/") ? raw : null;
+}
+
+export function browserJobActive(state?: CloudBrowserJob["state"]) {
+  return state === "pending" || state === "running" || state === "awaiting_verification";
 }
 
 export interface CloudBrowserJob {
   id: string;
-  state: "pending" | "running" | "completed" | "failed";
+  state: "pending" | "running" | "awaiting_verification" | "completed" | "failed";
   keywords: string;
   records: CloudBrowserRecord[];
   videos?: BulkVideo[];
@@ -78,4 +105,5 @@ export interface CloudBrowserJob {
   limited?: boolean;
   error?: CloudBrowserErrorCode;
   diagnostics?: CloudBrowserDiagnostics;
+  verification?: CloudBrowserVerification;
 }

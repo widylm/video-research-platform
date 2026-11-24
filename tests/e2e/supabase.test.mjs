@@ -686,14 +686,18 @@ test("collection UI polls an asynchronous job, displays its counters and saves m
     source: "fashion-radar-browser", fetchedAt: new Date().toISOString(), author: "reviewer", originalTitle: null,
     originalDescription: "Тест сохранения облачного сбора", publishedAt: "2026-11-20T12:00:00.000Z",
     views: 0, likes: 12, comments: 3, hashtags: ["находки"] };
-  let job = null, polls = 0, submitted;
+  let job = null, polls = 0, submitted, verified = false;
+  const liveView = 'https://live.browser.run/ui/view?mode=tab&wss=' + encodeURIComponent('live.browser.run/api/devtools/browser/session/page/target?jwt=fixture');
   await page.route("**/api/cloud-browser", async route => {
     if (route.request().method() === "POST") {
       submitted = route.request().postDataJSON();
       job = { id: crypto.randomUUID(), state: "pending", keywords: submitted.keywords, records: [] };
       return route.fulfill({ status: 202, json: { job } });
     }
-    if (job?.state === "pending" && ++polls >= 2) job = { ...job, state: "completed", videos: [video], scanned: 1, limited: true };
+    if (job?.state === "pending" && ++polls >= 2) job = { ...job, state: "awaiting_verification", error: "manual_intervention_required",
+      verification: { url: liveView, expiresAt: new Date(Date.now() + 120_000).toISOString() } };
+    if (job?.state === "awaiting_verification" && verified) job = { ...job, state: "completed", error: undefined,
+      verification: undefined, videos: [video], scanned: 1, limited: true };
     return route.fulfill({ json: { job } });
   });
   await button(page, "Сбор роликов").click();
@@ -701,7 +705,17 @@ test("collection UI polls an asynchronous job, displays its counters and saves m
   await page.getByLabel("Дата публикации").selectOption("0");
   await button(page, "Собрать ролики").click();
   const results = page.getByRole("region", { name: "Собранные ролики" });
+  const verifyLink = results.getByRole("link", { name: "Открыть окно проверки" });
+  await verifyLink.waitFor();
+  assert.equal(await verifyLink.getAttribute("href"), liveView);
+  assert.equal(await verifyLink.getAttribute("referrerpolicy"), "no-referrer");
+  assert.equal(await page.getByRole("button", { name: "Собираем…", exact: true }).isDisabled(), true);
+  await button(page, "Каталог видео").click();
+  await button(page, "Сбор роликов").click();
+  await verifyLink.waitFor();
+  verified = true;
   await results.getByRole("heading", { name: video.originalDescription }).waitFor();
+  assert.equal(await verifyLink.count(), 0);
   assert.equal(submitted.platform, "tiktok"); assert.equal(submitted.searchMode, "hashtag");
   await results.getByText("0", { exact: true }).waitFor();
   await results.getByText("3", { exact: true }).waitFor();
